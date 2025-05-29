@@ -27,8 +27,6 @@ jobs:
         run: |
           make test
           limgo -coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json
-          ls .
-          ls /tmp
           cat /tmp/covcheck.md >> $GITHUB_STEP_SUMMARY
 
 
@@ -49,5 +47,5 @@ jobs:
         if: success() || failure()
         with:
           name: test-coverage-results
-          path: /tmp/covcheck.tmp
+          path: /tmp/covcheck.md
           if-no-files-found: error
