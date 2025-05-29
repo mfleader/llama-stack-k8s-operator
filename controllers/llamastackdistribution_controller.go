@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/kustomize/api/krusty"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -129,6 +132,21 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 			return fmt.Errorf("failed to reconcile service: %w", err)
 		}
 	}
+
+	// // pick overlay directory
+	// overlayDir := filepath.Join("config", "default")
+
+	// // create on-disk FS and a default Kustomizer
+	// fs := filesys.MakeFsOnDisk()
+	// k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
+
+	// // apply *all* resources in that overlay using Server Side Apply
+	// if err := deploy.ApplyKustomizeManifests(
+	// 	ctx, r.Client, r.Scheme, fs, k, overlayDir,
+	// 	instance.Name, // use the CR name (or any unique fieldOwner)
+	// ); err != nil {
+	// 	return fmt.Errorf("applying kustomize overlay: %w", err)
+	// }
 
 	// Update status
 	if err := r.updateStatus(ctx, instance); err != nil {
