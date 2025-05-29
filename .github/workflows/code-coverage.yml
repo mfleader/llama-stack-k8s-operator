@@ -21,6 +21,12 @@ jobs:
         run: |
           make test
 
+      - name: Set up limgo
+        uses: GoTestTools/limgo-action@v1.0.2
+        with:
+          version: "v1.0.0"
+          install-only: true          
+
       # - name: Run test coverage check
       #   uses: GoTestTools/limgo-action@v1.0.0
       #   with:
