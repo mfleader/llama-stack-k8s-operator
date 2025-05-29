@@ -21,14 +21,15 @@ jobs:
         run: |
           make test
 
-      - name: Run test coverage check
-        uses: GoTestTools/limgo-action@v1.0.0
-        with:
-          version: "v1.0.0"
-          args: "-coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json"
+      # - name: Run test coverage check
+      #   uses: GoTestTools/limgo-action@v1.0.0
+      #   with:
+      #     version: "v1.0.0"
+      #     args: "-coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json"
 
-      - name: append test results
+      - name: calculate code coverage
         run: |
+          limgo -coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json
           cat /tmp/covcheck.md >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test coverage results
