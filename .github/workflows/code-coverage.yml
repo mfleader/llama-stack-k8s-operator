@@ -43,5 +43,5 @@ jobs:
         if: success() || failure()
         with:
           name: test-coverage-results
-          path: covcheck.tmp
+          path: /tmp/covcheck.tmp
           if-no-files-found: error
