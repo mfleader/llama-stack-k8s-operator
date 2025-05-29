@@ -27,6 +27,8 @@ jobs:
         run: |
           make test
           limgo -coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json
+          ls .
+          ls /tmp
           cat /tmp/covcheck.md >> $GITHUB_STEP_SUMMARY
 
 
