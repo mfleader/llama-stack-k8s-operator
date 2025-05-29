@@ -25,11 +25,11 @@ jobs:
         uses: GoTestTools/limgo-action@v1.0.0
         with:
           version: "v1.0.0"
-          args: "-coverfile=cover.out -outfmt=md -outfile=covcheck.md -config=.limgo.json -v=3"
+          args: "-coverfile=cover.out -outfmt=md -outfile=/tmp/covcheck.md -config=.limgo.json"
 
       - name: append test results
         run: |
-          cat covcheck.md >> $GITHUB_STEP_SUMMARY
+          cat /tmp/covcheck.md >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test coverage results
         uses: actions/upload-artifact@v4
