@@ -33,4 +33,4 @@ jobs:
         with:
           name: test-coverage-results
           path: covcheck.tmp
-          if-no-files-found: error          
+          if-no-files-found: error
