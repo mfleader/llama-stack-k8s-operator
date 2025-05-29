@@ -46,7 +46,7 @@ jobs:
           args: "-coverfile=cover.out -outfile=covcheck.tmp -config=.limgo.json -v=3"
 
       - name: Upload test coverage results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
           name: test-coverage-results
