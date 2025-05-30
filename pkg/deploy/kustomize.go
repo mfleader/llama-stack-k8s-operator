@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -14,6 +15,8 @@ import (
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
+
+const yamlBufferSize = 4096
 
 // ApplyKustomizeManifests renders manifests via Kustomize and
 // reconciles each resource in the cluster using server-side apply.
@@ -83,13 +86,13 @@ func RenderKustomize(
 func DecodeToUnstructured(yamlDocs []byte) ([]*unstructured.Unstructured, error) {
 	reader := bytes.NewReader(yamlDocs)
 	// Streaming decoder allows incremental parsing of each document.
-	dec := yaml.NewYAMLOrJSONDecoder(reader, 4096)
+	dec := yaml.NewYAMLOrJSONDecoder(reader, yamlBufferSize)
 
 	var objs []*unstructured.Unstructured
 	for {
 		u := &unstructured.Unstructured{}
 		if err := dec.Decode(u); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return nil, fmt.Errorf("decoding YAML to Unstructured: %w", err)
