@@ -133,21 +133,6 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 		}
 	}
 
-	// // pick overlay directory
-	// overlayDir := filepath.Join("config", "default")
-
-	// // create on-disk FS and a default Kustomizer
-	// fs := filesys.MakeFsOnDisk()
-	// k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
-
-	// // apply *all* resources in that overlay using Server Side Apply
-	// if err := deploy.ApplyKustomizeManifests(
-	// 	ctx, r.Client, r.Scheme, fs, k, overlayDir,
-	// 	instance.Name, // use the CR name (or any unique fieldOwner)
-	// ); err != nil {
-	// 	return fmt.Errorf("applying kustomize overlay: %w", err)
-	// }
-
 	// Update status
 	if err := r.updateStatus(ctx, instance); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
