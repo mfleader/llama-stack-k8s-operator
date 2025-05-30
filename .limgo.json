@@ -9,6 +9,8 @@
   "statistic": {
     "excludes": [
       "test_*",
+      "*_test.go",
+      "tests/.*",
       "zz_generated.deepcopy.go"
     ]
   }
