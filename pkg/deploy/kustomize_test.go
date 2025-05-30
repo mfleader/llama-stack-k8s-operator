@@ -34,7 +34,7 @@ spec:
 `),
 	))
 
-	// Updated overlay using 'patches:' instead of deprecated 'patchesStrategicMerge'
+	// Updated overlay using patches
 	overlayDir := "manifests/overlay"
 	require.NoError(t, memFs.MkdirAll(overlayDir))
 	require.NoError(t, memFs.WriteFile(
@@ -59,10 +59,8 @@ spec:
 `),
 	))
 
-	// Instantiate Kustomizer
 	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
 
-	// Exercise our RenderKustomize helper
 	objs, err := deploy.RenderKustomize(memFs, k, overlayDir)
 	require.NoError(t, err)
 	require.Len(t, objs, 1, "should render exactly one object")
