@@ -23,8 +23,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +53,7 @@ type LlamaStackDistributionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Log    logr.Logger
+	Fs     filesys.FileSystem
 	// Feature flags
 	EnableNetworkPolicy bool
 	// Cluster info
@@ -155,45 +154,38 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
-// reconcilePVC creates or updates the PVC for the LlamaStack server.
+// reconcilePVC creates or updates the PersistentVolumeClaim for the LlamaStack server.
+// It generates a dynamic Kustomize overlay in-memory to set the PVC's name and
+// storage size, then uses the generic ApplyKustomizeManifests helper to apply it.
 func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
 	if instance.Spec.Server.Storage == nil {
 		return nil
 	}
-	size := instance.Spec.Server.Storage.Size
-	if size == nil {
-		size = &llamav1alpha1.DefaultStorageSize
+	log := log.FromContext(ctx)
+
+	log.Info("Reconciling PVC")
+
+	// The reconciler's filesystem (r.Fs) is used here. For production, it's a
+	// real on-disk filesystem. For tests, it's a pre-populated in-memory filesystem.
+	overlayDir := "overlay"
+	if err := r.Fs.Mkdir(overlayDir); err != nil {
+		return fmt.Errorf("failed to create in-memory overlay dir: %w", err)
 	}
 
-	tempDir, err := os.MkdirTemp("", "pvc-overlay-")
-	if err != nil {
-		return fmt.Errorf("failed to create temp dir for kustomize overlay: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// This path works for tests running from the controllers/ directory.
-	// In production, the Dockerfile places manifests at /manifests, and the working dir is /
-	basePVCPath := filepath.Join("..", "manifests", "base", "pvc.yaml")
-	basePVC, err := os.ReadFile(basePVCPath)
-	if err != nil {
-		// If the test path fails, try the production path.
-		basePVCPath = filepath.Join("manifests", "base", "pvc.yaml")
-		basePVC, err = os.ReadFile(basePVCPath)
-		if err != nil {
-			return fmt.Errorf("failed to read base pvc manifest from test or prod paths: %w", err)
-		}
-	}
-
-	if err := os.WriteFile(filepath.Join(tempDir, "pvc.yaml"), basePVC, 0644); err != nil {
-		return fmt.Errorf("failed to write temporary base pvc.yaml: %w", err)
-	}
-
+	// Dynamically generate the kustomization.yaml content.
+	// This patch will set the instance-specific name and storage size.
 	pvcName := instance.Name + "-pvc"
-	kustomizationYAML := fmt.Sprintf(`
+	storageSpec := instance.Spec.Server.Storage
+	storageSize := storageSpec.Size
+	if storageSize == nil {
+		storageSize = &llamav1alpha1.DefaultStorageSize
+	}
+
+	kustomizationContent := fmt.Sprintf(`
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - pvc.yaml
+- ../manifests/base
 patches:
 - patch: |-
     - op: replace
@@ -204,17 +196,22 @@ patches:
       value: %s
   target:
     kind: PersistentVolumeClaim
-    name: model-storage
-`, pvcName, size.String())
+`, pvcName, storageSize.String())
 
-	kustomizationPath := filepath.Join(tempDir, "kustomization.yaml")
-	if err := os.WriteFile(kustomizationPath, []byte(kustomizationYAML), 0644); err != nil {
-		return fmt.Errorf("failed to write temporary kustomization.yaml: %w", err)
+	// Write the dynamic kustomization.yaml to the in-memory filesystem.
+	kustomizationPath := overlayDir + "/kustomization.yaml"
+	if err := r.Fs.WriteFile(kustomizationPath, []byte(kustomizationContent)); err != nil {
+		return fmt.Errorf("failed to write in-memory kustomization.yaml: %w", err)
 	}
 
-	fs := filesys.MakeFsOnDisk()
-	fieldOwner := "llama-stack-operator"
-	return deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, fs, tempDir, fieldOwner)
+	// Call the generic ApplyKustomizeManifests helper with our dynamic, in-memory overlay.
+	fieldOwner := "llamastack.io/llamastackdistribution-controller"
+	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, r.Fs, overlayDir, fieldOwner); err != nil {
+		return fmt.Errorf("failed to apply PVC Kustomize manifests: %w", err)
+	}
+
+	log.Info("Successfully reconciled PVC")
+	return nil
 }
 
 // reconcileDeployment manages the Deployment for the LlamaStack server.
@@ -599,6 +596,7 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		Client:              client,
 		Scheme:              scheme,
 		Log:                 log,
+		Fs:                  filesys.MakeFsOnDisk(),
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil
