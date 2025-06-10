@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +47,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -154,44 +157,64 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 
 // reconcilePVC creates or updates the PVC for the LlamaStack server.
 func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	logger := log.FromContext(ctx)
-
-	// Use default size if none specified
+	if instance.Spec.Server.Storage == nil {
+		return nil
+	}
 	size := instance.Spec.Server.Storage.Size
 	if size == nil {
 		size = &llamav1alpha1.DefaultStorageSize
 	}
 
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name + "-pvc",
-			Namespace: instance.Namespace,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: *size,
-				},
-			},
-		},
-	}
-
-	if err := ctrl.SetControllerReference(instance, pvc, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set controller reference: %w", err)
-	}
-
-	found := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: pvc.Namespace}, found)
+	tempDir, err := os.MkdirTemp("", "pvc-overlay-")
 	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			logger.Info("Creating PVC", "pvc", pvc.Name)
-			return r.Create(ctx, pvc)
-		}
-		return fmt.Errorf("failed to fetch PVC: %w", err)
+		return fmt.Errorf("failed to create temp dir for kustomize overlay: %w", err)
 	}
-	// PVCs are immutable after creation, so we don't need to update them
-	return nil
+	defer os.RemoveAll(tempDir)
+
+	// This path works for tests running from the controllers/ directory.
+	// In production, the Dockerfile places manifests at /manifests, and the working dir is /
+	basePVCPath := filepath.Join("..", "manifests", "base", "pvc.yaml")
+	basePVC, err := os.ReadFile(basePVCPath)
+	if err != nil {
+		// If the test path fails, try the production path.
+		basePVCPath = filepath.Join("manifests", "base", "pvc.yaml")
+		basePVC, err = os.ReadFile(basePVCPath)
+		if err != nil {
+			return fmt.Errorf("failed to read base pvc manifest from test or prod paths: %w", err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, "pvc.yaml"), basePVC, 0644); err != nil {
+		return fmt.Errorf("failed to write temporary base pvc.yaml: %w", err)
+	}
+
+	pvcName := instance.Name + "-pvc"
+	kustomizationYAML := fmt.Sprintf(`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - pvc.yaml
+patches:
+- patch: |-
+    - op: replace
+      path: /metadata/name
+      value: %s
+    - op: replace
+      path: /spec/resources/requests/storage
+      value: %s
+  target:
+    kind: PersistentVolumeClaim
+    name: model-storage
+`, pvcName, size.String())
+
+	kustomizationPath := filepath.Join(tempDir, "kustomization.yaml")
+	if err := os.WriteFile(kustomizationPath, []byte(kustomizationYAML), 0644); err != nil {
+		return fmt.Errorf("failed to write temporary kustomization.yaml: %w", err)
+	}
+
+	fs := filesys.MakeFsOnDisk()
+	fieldOwner := "llama-stack-operator"
+	return deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, fs, tempDir, fieldOwner)
 }
 
 // reconcileDeployment manages the Deployment for the LlamaStack server.

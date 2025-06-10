@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
@@ -20,11 +22,12 @@ const yamlBufferSize = 4096
 
 // ApplyKustomizeManifests renders manifests via Kustomize and
 // reconciles each resource in the cluster using server-side apply.
-// Accepts a customizable file system and Kustomizer to support in-memory testing.
+// It sets the owner reference and namespace on each created object.
 func ApplyKustomizeManifests(
 	ctx context.Context,
 	cli client.Client,
 	scheme *runtime.Scheme,
+	owner metav1.Object,
 	fs filesys.FileSystem,
 	manifestPath string,
 	fieldOwner string,
@@ -38,6 +41,16 @@ func ApplyKustomizeManifests(
 	// Use server-side apply for each object so the API server
 	// manages field ownership and merging of concurrent updates.
 	for _, u := range objs {
+		// Set namespace to match the owner. This is crucial for testability
+		// and for the controller to work with namespaced resources.
+		u.SetNamespace(owner.GetNamespace())
+
+		// Set the controller reference so that the object is garbage collected
+		// when the owner is deleted, and to establish ownership for the controller.
+		if err := ctrl.SetControllerReference(owner, u, scheme); err != nil {
+			return fmt.Errorf("failed to set controller reference on %s/%s: %w", u.GetKind(), u.GetName(), err)
+		}
+
 		if err := cli.Patch(ctx, u, client.Apply, client.FieldOwner(fieldOwner)); err != nil {
 			return fmt.Errorf("failed to patch %s/%s: %w", u.GetKind(), u.GetName(), err)
 		}
