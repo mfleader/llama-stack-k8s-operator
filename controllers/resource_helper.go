@@ -72,7 +72,7 @@ func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, contain
 			Name: "lls-storage",
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: instance.Name + "-pvc",
+					ClaimName: instance.Name,
 				},
 			},
 		})

@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 const (
@@ -58,7 +59,7 @@ func baseInstance() *llamav1alpha1.LlamaStackDistribution {
 	}
 }
 
-func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime.Scheme) *LlamaStackDistributionReconciler {
+func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime.Scheme, fs filesys.FileSystem) *LlamaStackDistributionReconciler {
 	// ClusterInfo is required by the reconciler. We provide static test data for it.
 	clusterInfo := &cluster.ClusterInfo{
 		OperatorNamespace: "default",
@@ -70,6 +71,7 @@ func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime
 		Client:      ctrlRuntimeClient,
 		Scheme:      currentScheme,
 		Log:         ctrl.Log.WithName("controllers").WithName("LlamaStackDistribution"),
+		Fs:          fs,
 		ClusterInfo: clusterInfo,
 	}
 }
@@ -131,7 +133,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test-pvc",
+						ClaimName: "test",
 					},
 				},
 			},
@@ -150,7 +152,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test-pvc",
+						ClaimName: "test",
 					},
 				},
 			},
@@ -192,8 +194,20 @@ func TestStorageConfiguration(t *testing.T) {
 				}
 			}()
 
+			// Create and populate an in-memory filesystem for the test.
+			fs := filesys.MakeFsInMemory()
+			manifestsBaseDir := "../manifests/base"
+			kustomizationContent, err := os.ReadFile(filepath.Join(manifestsBaseDir, "kustomization.yaml"))
+			require.NoError(t, err)
+			pvcContent, err := os.ReadFile(filepath.Join(manifestsBaseDir, "pvc.yaml"))
+			require.NoError(t, err)
+
+			fs.MkdirAll("manifests/base")
+			fs.WriteFile("manifests/base/kustomization.yaml", kustomizationContent)
+			fs.WriteFile("manifests/base/pvc.yaml", pvcContent)
+
 			// setupTestReconciler creates a reconciler instance with the real Kubernetes client and scheme provided by envtest.
-			reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme)
+			reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme, fs)
 
 			_, reconcileErr := reconciler.Reconcile(context.Background(), ctrl.Request{
 				NamespacedName: types.NamespacedName{
@@ -267,7 +281,8 @@ func verifyVolumeMount(t *testing.T, containers []corev1.Container, expectedMoun
 func verifyPVC(t *testing.T, ctrlRuntimeClient client.Client, instance *llamav1alpha1.LlamaStackDistribution, expectedSize *resource.Quantity) {
 	t.Helper()
 	pvc := &corev1.PersistentVolumeClaim{}
-	pvcKey := types.NamespacedName{Name: instance.Name + "-pvc", Namespace: instance.Namespace}
+	// The PVC name should be the same as the instance name.
+	pvcKey := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
 
 	// envtest interacts with a real API server, which is eventually consistent.
 	// We use require.Eventually to poll until the PVC becomes available after reconciliation.

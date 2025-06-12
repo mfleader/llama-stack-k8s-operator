@@ -43,7 +43,9 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 const (
@@ -55,6 +57,7 @@ type LlamaStackDistributionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Log    logr.Logger
+	Fs     filesys.FileSystem
 	// Feature flags
 	EnableNetworkPolicy bool
 	// Cluster info
@@ -154,45 +157,46 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
-// reconcilePVC creates or updates the PVC for the LlamaStack server.
+// reconcilePVC ensures the state of the PersistentVolumeClaim matches the LlamaStackDistribution spec.
 func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	logger := log.FromContext(ctx)
+	// A PVC is only required if the user has defined a storage spec.
+	if instance.Spec.Server.Storage == nil {
+		return nil
+	}
+	log := log.FromContext(ctx)
+	log.Info("Reconciling PVC")
 
-	// Use default size if none specified
-	size := instance.Spec.Server.Storage.Size
-	if size == nil {
-		size = &llamav1alpha1.DefaultStorageSize
+	// Default the storage size to ensure the Kustomize replacement rule has a source path.
+	if instance.Spec.Server.Storage.Size == nil {
+		instance.Spec.Server.Storage.Size = &llamav1alpha1.DefaultStorageSize
 	}
 
-	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name + "-pvc",
-			Namespace: instance.Namespace,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: *size,
-				},
-			},
-		},
+	// Facilitate idempotency by copying source files to an in-memory filesystem
+	// to stage the Kustomize build in isolation.
+	opFs := filesys.MakeFsInMemory()
+	basePath := "manifests/base"
+	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.Fs, basePath); err != nil {
+		return fmt.Errorf("failed to copy base manifests to memory: %w", err)
 	}
 
-	if err := ctrl.SetControllerReference(instance, pvc, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set controller reference: %w", err)
-	}
-
-	found := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, client.ObjectKeyFromObject(pvc), found)
+	// Get the instance's GroupVersionKind, which is needed for valid YAML marshalling.
+	instanceGVK, err := apiutil.GVKForObject(instance, r.Scheme)
 	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			logger.Info("Creating PVC", "pvc", pvc.Name)
-			return r.Create(ctx, pvc)
-		}
-		return fmt.Errorf("failed to fetch PVC: %w", err)
+		return fmt.Errorf("failed to get GVK for instance: %w", err)
 	}
-	// PVCs are immutable after creation, so we don't need to update them
+
+	// Dynamically prepare the Kustomize inputs by injecting the instance and namespace.
+	if err := deploy.AddInstanceToKustomizeFS(instance, instanceGVK, opFs, basePath); err != nil {
+		return fmt.Errorf("failed to prepare kustomize input with instance: %w", err)
+	}
+
+	// Apply the Kustomize output, setting ownership and filtering the owner object itself.
+	fieldOwner := "llama-stack-operator"
+	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, instanceGVK, opFs, basePath, fieldOwner); err != nil {
+		return fmt.Errorf("failed to apply manifests: %w", err)
+	}
+
+	log.Info("Successfully reconciled PVC")
 	return nil
 }
 
@@ -596,6 +600,7 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		Client:              client,
 		Scheme:              scheme,
 		Log:                 log,
+		Fs:                  filesys.MakeFsOnDisk(),
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil

@@ -216,7 +216,7 @@ func verifyStorageVolumes(t *testing.T, podSpec corev1.PodSpec, instance *llamav
 		for _, vol := range podSpec.Volumes {
 			if vol.Name == "lls-storage" && vol.PersistentVolumeClaim != nil {
 				pvcFound = true
-				assert.Equal(t, instance.Name+"-pvc", vol.PersistentVolumeClaim.ClaimName)
+				assert.Equal(t, instance.Name, vol.PersistentVolumeClaim.ClaimName)
 				break
 			}
 		}
