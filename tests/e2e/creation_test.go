@@ -272,7 +272,7 @@ func testDistributionStatus(t *testing.T, llsdistributionCR *v1alpha1.LlamaStack
 
 func testPVCConfiguration(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-	pvcName := distribution.Name
+	pvcName := distribution.Name + "-pvc"
 	pvc := &corev1.PersistentVolumeClaim{}
 	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
 		Namespace: distribution.Namespace,

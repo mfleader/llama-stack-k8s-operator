@@ -134,7 +134,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test",
+						ClaimName: "test-pvc",
 					},
 				},
 			},
@@ -153,7 +153,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test",
+						ClaimName: "test-pvc",
 					},
 				},
 			},
