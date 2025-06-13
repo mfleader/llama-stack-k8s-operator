@@ -18,9 +18,11 @@ package controllers
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"sync"
@@ -48,6 +50,9 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
+//go:embed all:manifests/base
+var manifests embed.FS
+
 const (
 	operatorConfigData = "llama-stack-operator-config"
 )
@@ -55,9 +60,9 @@ const (
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
 type LlamaStackDistributionReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Log    logr.Logger
-	Fs     filesys.FileSystem
+	Scheme     *runtime.Scheme
+	Log        logr.Logger
+	ManifestFS fs.FS
 	// Feature flags
 	EnableNetworkPolicy bool
 	// Cluster info
@@ -175,7 +180,7 @@ func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, ins
 	// to stage the Kustomize build in isolation.
 	opFs := filesys.MakeFsInMemory()
 	basePath := "manifests/base"
-	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.Fs, basePath); err != nil {
+	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.ManifestFS, basePath); err != nil {
 		return fmt.Errorf("failed to copy base manifests to memory: %w", err)
 	}
 
@@ -600,7 +605,7 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		Client:              client,
 		Scheme:              scheme,
 		Log:                 log,
-		Fs:                  filesys.MakeFsOnDisk(),
+		ManifestFS:          &manifests,
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil

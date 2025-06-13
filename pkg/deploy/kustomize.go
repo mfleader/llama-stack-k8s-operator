@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path/filepath"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -140,27 +141,27 @@ func decodeToUnstructured(yamlDocs []byte) ([]*unstructured.Unstructured, error)
 // CopyKustomizeBaseToMemory reads all files from a given path in the source
 // filesystem (srcFs) and writes them into the destination filesystem (opFs).
 // This is a generic utility for preparing an in-memory Kustomize operation.
-func CopyKustomizeBaseToMemory(opFs, srcFs filesys.FileSystem, basePath string) error {
+func CopyKustomizeBaseToMemory(opFs filesys.FileSystem, srcFs fs.FS, basePath string) error {
 	// Create the base directory in the destination filesystem.
 	if err := opFs.MkdirAll(basePath); err != nil {
 		return fmt.Errorf("failed to create in-memory base dir %s: %w", basePath, err)
 	}
 
 	// Read all files from the source directory.
-	files, err := srcFs.ReadDir(basePath)
+	files, err := fs.ReadDir(srcFs, basePath)
 	if err != nil {
 		return fmt.Errorf("failed to read source directory %s: %w", basePath, err)
 	}
 
 	// Copy each file to the destination filesystem.
 	for _, file := range files {
-		srcPath := filepath.Join(basePath, file)
-		content, err := srcFs.ReadFile(srcPath)
+		srcPath := filepath.Join(basePath, file.Name())
+		content, err := fs.ReadFile(srcFs, srcPath)
 		if err != nil {
 			return fmt.Errorf("failed to read source file %s: %w", srcPath, err)
 		}
 
-		destPath := filepath.Join(basePath, file)
+		destPath := filepath.Join(basePath, file.Name())
 		if err := opFs.WriteFile(destPath, content); err != nil {
 			return fmt.Errorf("failed to write in-memory file %s: %w", destPath, err)
 		}
