@@ -55,6 +55,7 @@ var manifests embed.FS
 
 const (
 	operatorConfigData = "llama-stack-operator-config"
+	manifestsBasePath  = "manifests/base"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -179,8 +180,7 @@ func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, ins
 	// Facilitate idempotency by copying source files to an in-memory filesystem
 	// to stage the Kustomize build in isolation.
 	opFs := filesys.MakeFsInMemory()
-	basePath := "manifests/base"
-	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.ManifestFS, basePath); err != nil {
+	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.ManifestFS, manifestsBasePath); err != nil {
 		return fmt.Errorf("failed to copy base manifests to memory: %w", err)
 	}
 
@@ -191,13 +191,13 @@ func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, ins
 	}
 
 	// Dynamically prepare the Kustomize inputs by injecting the instance and namespace.
-	if err := deploy.AddInstanceToKustomizeFS(instance, instanceGVK, opFs, basePath); err != nil {
+	if err := deploy.AddInstanceToKustomizeFS(instance, instanceGVK, opFs, manifestsBasePath); err != nil {
 		return fmt.Errorf("failed to prepare kustomize input with instance: %w", err)
 	}
 
 	// Apply the Kustomize output, setting ownership and filtering the owner object itself.
 	fieldOwner := "llama-stack-operator"
-	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, instanceGVK, opFs, basePath, fieldOwner); err != nil {
+	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, instanceGVK, opFs, manifestsBasePath, fieldOwner); err != nil {
 		return fmt.Errorf("failed to apply manifests: %w", err)
 	}
 
