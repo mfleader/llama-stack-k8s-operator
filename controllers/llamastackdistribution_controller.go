@@ -18,11 +18,9 @@ package controllers
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"sync"
@@ -33,6 +31,7 @@ import (
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/cluster"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/deploy"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/featureflags"
+	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -44,14 +43,8 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/kustomize/kyaml/filesys"
-	"sigs.k8s.io/yaml"
 )
-
-//go:embed all:manifests/base
-var manifests embed.FS
 
 const (
 	operatorConfigData = "llama-stack-operator-config"
@@ -61,9 +54,8 @@ const (
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
 type LlamaStackDistributionReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	Log        logr.Logger
-	ManifestFS fs.FS
+	Scheme *runtime.Scheme
+	Log    logr.Logger
 	// Feature flags
 	EnableNetworkPolicy bool
 	// Cluster info
@@ -164,47 +156,47 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Complete(r)
 }
 
-// reconcilePVC ensures the state of the PersistentVolumeClaim matches the LlamaStackDistribution spec.
-func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	// A PVC is only required if the user has defined a storage spec.
-	if instance.Spec.Server.Storage == nil {
-		return nil
-	}
-	log := log.FromContext(ctx)
-	log.Info("Reconciling PVC")
+// // reconcilePVC ensures the state of the PersistentVolumeClaim matches the LlamaStackDistribution spec.
+// func (r *LlamaStackDistributionReconciler) reconcilePVC(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+// 	// A PVC is only required if the user has defined a storage spec.
+// 	if instance.Spec.Server.Storage == nil {
+// 		return nil
+// 	}
+// 	log := log.FromContext(ctx)
+// 	log.Info("Reconciling PVC")
 
-	// Default the storage size to ensure the Kustomize replacement rule has a source path.
-	if instance.Spec.Server.Storage.Size == nil {
-		instance.Spec.Server.Storage.Size = &llamav1alpha1.DefaultStorageSize
-	}
+// 	// Default the storage size to ensure the Kustomize replacement rule has a source path.
+// 	if instance.Spec.Server.Storage.Size == nil {
+// 		instance.Spec.Server.Storage.Size = &llamav1alpha1.DefaultStorageSize
+// 	}
 
-	// Facilitate idempotency by copying source files to an in-memory filesystem
-	// to stage the Kustomize build in isolation.
-	opFs := filesys.MakeFsInMemory()
-	if err := deploy.CopyKustomizeBaseToMemory(opFs, r.ManifestFS, manifestsBasePath); err != nil {
-		return fmt.Errorf("failed to copy base manifests to memory: %w", err)
-	}
+// 	// Facilitate idempotency by copying source files to an in-memory filesystem
+// 	// to stage the Kustomize build in isolation.
+// 	opFs := filesys.MakeFsInMemory()
+// 	if err := deploy.CopyKustomizeBaseToMemory(opFs, manifestsBasePath); err != nil {
+// 		return fmt.Errorf("failed to copy base manifests to memory: %w", err)
+// 	}
 
-	// Get the instance's GroupVersionKind, which is needed for valid YAML marshalling.
-	instanceGVK, err := apiutil.GVKForObject(instance, r.Scheme)
-	if err != nil {
-		return fmt.Errorf("failed to get GVK for instance: %w", err)
-	}
+// 	// Get the instance's GroupVersionKind, which is needed for valid YAML marshalling.
+// 	instanceGVK, err := apiutil.GVKForObject(instance, r.Scheme)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to get GVK for instance: %w", err)
+// 	}
 
-	// Dynamically prepare the Kustomize inputs by injecting the instance and namespace.
-	if err := deploy.AddInstanceToKustomizeFS(instance, instanceGVK, opFs, manifestsBasePath); err != nil {
-		return fmt.Errorf("failed to prepare kustomize input with instance: %w", err)
-	}
+// 	// Dynamically prepare the Kustomize inputs by injecting the instance and namespace.
+// 	if err := deploy.AddInstanceToKustomizeFS(instance, instanceGVK, opFs, manifestsBasePath); err != nil {
+// 		return fmt.Errorf("failed to prepare kustomize input with instance: %w", err)
+// 	}
 
-	// Apply the Kustomize output, setting ownership and filtering the owner object itself.
-	fieldOwner := "llama-stack-operator"
-	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, instanceGVK, opFs, manifestsBasePath, fieldOwner); err != nil {
-		return fmt.Errorf("failed to apply manifests: %w", err)
-	}
+// 	// Apply the Kustomize output, setting ownership and filtering the owner object itself.
+// 	fieldOwner := "llama-stack-operator"
+// 	if err := deploy.ApplyKustomizeManifests(ctx, r.Client, r.Scheme, instance, instanceGVK, opFs, manifestsBasePath, fieldOwner); err != nil {
+// 		return fmt.Errorf("failed to apply manifests: %w", err)
+// 	}
 
-	log.Info("Successfully reconciled PVC")
-	return nil
-}
+// 	log.Info("Successfully reconciled PVC")
+// 	return nil
+// }
 
 // reconcileDeployment manages the Deployment for the LlamaStack server.
 func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
@@ -606,7 +598,6 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		Client:              client,
 		Scheme:              scheme,
 		Log:                 log,
-		ManifestFS:          &manifests,
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil

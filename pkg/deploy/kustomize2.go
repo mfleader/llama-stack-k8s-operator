@@ -171,7 +171,8 @@ func applyPlugins(resMap resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStackD
 	fieldTransformerPlugin := plugins.CreateFieldTransformer(plugins.FieldTransformerConfig{
 		Mappings: []plugins.FieldMapping{
 			{
-				SourceValue:       ownerInstance.Spec.Server.Storage.Size,
+				SourceValue:       getStorageSize(ownerInstance),
+				DefaultValue:      llamav1alpha1.DefaultStorageSize.String(),
 				TargetField:       "spec.resources.requests.storage",
 				TargetKind:        "PersistentVolumeClaim",
 				CreateIfNotExists: true,
@@ -184,4 +185,12 @@ func applyPlugins(resMap resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStackD
 	}
 
 	return nil
+}
+
+// getStorageSize returns the storage size to use, falling back to the default if not specified
+func getStorageSize(instance *llamav1alpha1.LlamaStackDistribution) string {
+	if instance.Spec.Server.Storage != nil && instance.Spec.Server.Storage.Size != nil {
+		return instance.Spec.Server.Storage.Size.String()
+	}
+	return "" // Return empty string to trigger default value
 }
