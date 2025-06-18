@@ -18,21 +18,21 @@ package controllers
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/google/go-cmp/cmp"
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/cluster"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/deploy"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/featureflags"
+	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -43,14 +43,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
-	"sigs.k8s.io/yaml"
 )
-
-//go:embed all:manifests/base
-var manifests embed.FS
 
 const (
 	operatorConfigData = "llama-stack-operator-config"
@@ -60,9 +59,7 @@ const (
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
 type LlamaStackDistributionReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	Log        logr.Logger
-	ManifestFS fs.FS
+	Scheme *runtime.Scheme
 	// Feature flags
 	EnableNetworkPolicy bool
 	// Cluster info
@@ -78,15 +75,22 @@ type LlamaStackDistributionReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.12.2/pkg/reconcile
 func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log = r.Log.WithValues("llamastack", req.NamespacedName)
+	// Create a logger with request-specific values and store it in the context.
+	// This ensures consistent logging across the reconciliation process and its sub-functions.
+	// The logger is retrieved from the context in each sub-function that needs it, maintaining
+	// the request-specific values throughout the call chain.
+	// Always ensure the name of the CR and the namespace are included in the logger.
+	log := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name)
+	ctx = logr.NewContext(ctx, log)
 
 	// Fetch the LlamaStack instance
 	instance, err := r.fetchInstance(ctx, req.NamespacedName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
 	if instance == nil {
-		r.Log.Info("LlamaStackDistribution resource not found, skipping reconciliation", "namespacedName", req.NamespacedName)
+		log.Info("LlamaStackDistribution resource not found, skipping reconciliation")
 		return ctrl.Result{}, nil
 	}
 
@@ -100,16 +104,17 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	r.Log.Info("Successfully reconciled LlamaStackDistribution")
+	log.Info("Successfully reconciled LlamaStackDistribution")
 	return ctrl.Result{}, nil
 }
 
 // fetchInstance retrieves the LlamaStackDistribution instance.
 func (r *LlamaStackDistributionReconciler) fetchInstance(ctx context.Context, namespacedName types.NamespacedName) (*llamav1alpha1.LlamaStackDistribution, error) {
+	log := log.FromContext(ctx)
 	instance := &llamav1alpha1.LlamaStackDistribution{}
 	if err := r.Get(ctx, namespacedName, instance); err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.Log.Info("failed to find LlamaStackDistribution resource")
+			log.Info("failed to find LlamaStackDistribution resource")
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to fetch LlamaStackDistribution: %w", err)
@@ -121,8 +126,11 @@ func (r *LlamaStackDistributionReconciler) fetchInstance(ctx context.Context, na
 func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
 	// Reconcile the PVC if storage is configured
 	if instance.Spec.Server.Storage != nil {
-		// Apply the Kustomize manifests for PVC
-		if err := deploy.ApplyKustomizeManifests2(ctx, r.Client, r.Scheme, instance, manifestsBasePath); err != nil {
+		resMap, err := deploy.RenderKustomize(filesys.MakeFsOnDisk(), manifestsBasePath, instance)
+		if err != nil {
+			return fmt.Errorf("failed to render PVC manifests: %w", err)
+		}
+		if err := deploy.ApplyResources(ctx, r.Client, r.Scheme, instance, resMap); err != nil {
 			return fmt.Errorf("failed to apply PVC manifests: %w", err)
 		}
 	}
@@ -155,7 +163,36 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&llamav1alpha1.LlamaStackDistribution{}).
+		For(&llamav1alpha1.LlamaStackDistribution{}, builder.WithPredicates(predicate.Funcs{
+			UpdateFunc: func(e event.UpdateEvent) bool {
+				// Safely type assert old object
+				oldObj, ok := e.ObjectOld.(*llamav1alpha1.LlamaStackDistribution)
+				if !ok {
+					return false
+				}
+				oldObjCopy := oldObj.DeepCopy()
+
+				// Safely type assert new object
+				newObj, ok := e.ObjectNew.(*llamav1alpha1.LlamaStackDistribution)
+				if !ok {
+					return false
+				}
+				newObjCopy := newObj.DeepCopy()
+
+				// Compare only spec, ignoring metadata and status
+				if diff := cmp.Diff(oldObjCopy.Spec, newObjCopy.Spec); diff != "" {
+					logger := mgr.GetLogger().WithValues("namespace", newObjCopy.Namespace, "name", newObjCopy.Name)
+					logger.Info("LlamaStackDistribution CR spec changed")
+					// Note that both the logger and fmt.Printf could appear entangled in the output
+					// but there is no simple way to avoid this (forcing the logger to flush its output).
+					// When the logger is used to print the diff the output is hard to read,
+					// fmt.Printf is better for readability.
+					fmt.Printf("%s\n", diff)
+				}
+
+				return true
+			},
+		})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
@@ -183,6 +220,11 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 
 	// Configure storage
 	podSpec := configurePodStorage(instance, container)
+
+	// Set the service account name if specified in PodOverrides
+	if instance.Spec.Server.PodOverrides != nil && instance.Spec.Server.PodOverrides.ServiceAccountName != "" {
+		podSpec.ServiceAccountName = instance.Spec.Server.PodOverrides.ServiceAccountName
+	}
 
 	// Create deployment object
 	deployment := &appsv1.Deployment{
@@ -215,6 +257,7 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 
 // reconcileService manages the Service if ports are defined.
 func (r *LlamaStackDistributionReconciler) reconcileService(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	log := log.FromContext(ctx)
 	// Use the container's port (defaulted to 8321 if unset)
 	port := deploy.GetServicePort(instance)
 
@@ -239,7 +282,7 @@ func (r *LlamaStackDistributionReconciler) reconcileService(ctx context.Context,
 		},
 	}
 
-	return deploy.ApplyService(ctx, r.Client, r.Scheme, instance, service, r.Log)
+	return deploy.ApplyService(ctx, r.Client, r.Scheme, instance, service, log)
 }
 
 // getServerURL returns the URL for the LlamaStack server.
@@ -316,6 +359,8 @@ func (r *LlamaStackDistributionReconciler) getProviderInfo(ctx context.Context, 
 
 // updateStatus refreshes the LlamaStackDistribution status.
 func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	log := log.FromContext(ctx)
+
 	deployment := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, deployment)
 	if err != nil && !k8serrors.IsNotFound(err) {
@@ -376,7 +421,7 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 		// Process health check results by reading from the channel
 		healthResult := <-healthChan
 		if healthResult.err != nil {
-			r.Log.Error(healthResult.err, "failed to check health endpoint")
+			log.Error(healthResult.err, "failed to check health endpoint")
 		} else {
 			instance.Status.Ready = healthResult.healthy
 		}
@@ -384,7 +429,7 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 		// Process provider information results
 		providersResult := <-providersChan
 		if providersResult.err != nil {
-			r.Log.Error(providersResult.err, "failed to get provider information")
+			log.Error(providersResult.err, "failed to get provider information")
 		} else {
 			instance.Status.DistributionConfig.Providers = providersResult.providers
 		}
@@ -401,6 +446,7 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 
 // reconcileNetworkPolicy manages the NetworkPolicy for the LlamaStack server.
 func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	log := log.FromContext(ctx)
 	networkPolicy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name + "-network-policy",
@@ -410,7 +456,7 @@ func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Co
 
 	// If feature is disabled, delete the NetworkPolicy if it exists
 	if !r.EnableNetworkPolicy {
-		return deploy.HandleDisabledNetworkPolicy(ctx, r.Client, networkPolicy, r.Log)
+		return deploy.HandleDisabledNetworkPolicy(ctx, r.Client, networkPolicy, log)
 	}
 
 	port := deploy.GetServicePort(instance)
@@ -475,7 +521,7 @@ func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Co
 		},
 	}
 
-	return deploy.ApplyNetworkPolicy(ctx, r.Client, r.Scheme, instance, networkPolicy, r.Log)
+	return deploy.ApplyNetworkPolicy(ctx, r.Client, r.Scheme, instance, networkPolicy, log)
 }
 
 // createDefaultConfigMap creates a ConfigMap with default feature flag values.
@@ -522,7 +568,6 @@ func parseFeatureFlags(configMapData map[string]string) (bool, error) {
 // NewLlamaStackDistributionReconciler creates a new reconciler with default image mappings.
 func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Client, scheme *runtime.Scheme,
 	clusterInfo *cluster.ClusterInfo) (*LlamaStackDistributionReconciler, error) {
-	log := log.FromContext(ctx).WithName("controller")
 	// get operator namespace
 	operatorNamespace, err := deploy.GetOperatorNamespace()
 	if err != nil {
@@ -562,8 +607,6 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 	return &LlamaStackDistributionReconciler{
 		Client:              client,
 		Scheme:              scheme,
-		Log:                 log,
-		ManifestFS:          &manifests,
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil

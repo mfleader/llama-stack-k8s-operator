@@ -3,11 +3,9 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
@@ -17,6 +15,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,7 +59,7 @@ func baseInstance() *llamav1alpha1.LlamaStackDistribution {
 	}
 }
 
-func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime.Scheme, manifestFS fs.FS) *LlamaStackDistributionReconciler {
+func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime.Scheme) *LlamaStackDistributionReconciler {
 	// ClusterInfo is required by the reconciler. We provide static test data for it.
 	clusterInfo := &cluster.ClusterInfo{
 		OperatorNamespace: "default",
@@ -71,8 +70,6 @@ func setupTestReconciler(ctrlRuntimeClient client.Client, currentScheme *runtime
 	return &LlamaStackDistributionReconciler{
 		Client:      ctrlRuntimeClient,
 		Scheme:      currentScheme,
-		Log:         ctrl.Log.WithName("controllers").WithName("LlamaStackDistribution"),
-		ManifestFS:  manifestFS,
 		ClusterInfo: clusterInfo,
 	}
 }
@@ -102,6 +99,7 @@ func TestStorageConfiguration(t *testing.T) {
 	require.NoError(t, corev1.AddToScheme(k8sScheme))
 	require.NoError(t, appsv1.AddToScheme(k8sScheme))
 	require.NoError(t, networkingv1.AddToScheme(k8sScheme))
+	require.NoError(t, rbacv1.AddToScheme(k8sScheme))
 
 	ctrlRuntimeClient, err := client.New(cfg, client.Options{Scheme: k8sScheme})
 	require.NoError(t, err)
@@ -134,7 +132,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test",
+						ClaimName: "test-pvc",
 					},
 				},
 			},
@@ -153,7 +151,7 @@ func TestStorageConfiguration(t *testing.T) {
 				Name: "lls-storage",
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: "test",
+						ClaimName: "test-pvc",
 					},
 				},
 			},
@@ -195,20 +193,8 @@ func TestStorageConfiguration(t *testing.T) {
 				}
 			}()
 
-			// Create and populate an in-memory filesystem for the test.
-			manifestsBaseDir := "manifests/base"
-			kustomizationContent, err := os.ReadFile(filepath.Join(manifestsBaseDir, "kustomization.yaml"))
-			require.NoError(t, err)
-			pvcContent, err := os.ReadFile(filepath.Join(manifestsBaseDir, "pvc.yaml"))
-			require.NoError(t, err)
-
-			testFS := fstest.MapFS{
-				"manifests/base/kustomization.yaml": {Data: kustomizationContent},
-				"manifests/base/pvc.yaml":           {Data: pvcContent},
-			}
-
 			// setupTestReconciler creates a reconciler instance with the real Kubernetes client and scheme provided by envtest.
-			reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme, testFS)
+			reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme)
 
 			_, reconcileErr := reconciler.Reconcile(context.Background(), ctrl.Request{
 				NamespacedName: types.NamespacedName{
@@ -235,7 +221,8 @@ func TestStorageConfiguration(t *testing.T) {
 				if expectedSize == nil {
 					expectedSize = &llamav1alpha1.DefaultStorageSize
 				}
-				verifyPVC(t, ctrlRuntimeClient, instance, expectedSize)
+				expectedPVCName := fmt.Sprintf("%s-pvc", instance.Name)
+				verifyPVC(t, ctrlRuntimeClient, instance, expectedPVCName, expectedSize)
 			}
 		})
 	}
@@ -279,21 +266,19 @@ func verifyVolumeMount(t *testing.T, containers []corev1.Container, expectedMoun
 	assert.Equal(t, expectedMount.MountPath, foundMount.MountPath, "mount path should match")
 }
 
-func verifyPVC(t *testing.T, ctrlRuntimeClient client.Client, instance *llamav1alpha1.LlamaStackDistribution, expectedSize *resource.Quantity) {
+func verifyPVC(t *testing.T, ctrlRuntimeClient client.Client, instance *llamav1alpha1.LlamaStackDistribution, expectedName string, expectedSize *resource.Quantity) {
 	t.Helper()
 	pvc := &corev1.PersistentVolumeClaim{}
-	// The PVC name should be the same as the instance name.
-	pvcKey := types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}
-
-	// envtest interacts with a real API server, which is eventually consistent.
-	// We use require.Eventually to poll until the PVC becomes available after reconciliation.
+	pvcKey := types.NamespacedName{Name: expectedName, Namespace: instance.Namespace}
 	require.Eventually(t, func() bool {
 		err := ctrlRuntimeClient.Get(context.Background(), pvcKey, pvc)
 		return err == nil
 	}, eventuallyTimeout, eventuallyInterval, "timed out waiting for PVC %s to be available", pvcKey)
 
-	storageRequest, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
-	require.True(t, ok, "PVC does not have storage request")
-	assert.Equal(t, expectedSize.String(), storageRequest.String(),
-		"PVC size should match")
+	// Check the size
+	if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+		assert.True(t, expectedSize.Equal(storage), "PVC size should match expected size")
+	} else {
+		assert.Fail(t, "PVC does not have a storage request")
+	}
 }

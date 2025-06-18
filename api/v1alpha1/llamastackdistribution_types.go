@@ -94,12 +94,18 @@ type ContainerSpec struct {
 	Port      int32                       `json:"port,omitempty"` // Defaults to 8321 if unset
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 	Env       []corev1.EnvVar             `json:"env,omitempty"` // Runtime env vars (e.g., INFERENCE_MODEL)
+	Command   []string                    `json:"command,omitempty"`
+	Args      []string                    `json:"args,omitempty"`
 }
 
 // PodOverrides allows advanced pod-level customization.
 type PodOverrides struct {
-	Volumes      []corev1.Volume      `json:"volumes,omitempty"`
-	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+	// ServiceAccountName allows users to specify their own ServiceAccount
+	// If not specified, the operator will use the default ServiceAccount
+	// +optional
+	ServiceAccountName string               `json:"serviceAccountName,omitempty"`
+	Volumes            []corev1.Volume      `json:"volumes,omitempty"`
+	VolumeMounts       []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // ProviderInfo represents a single provider from the providers endpoint.

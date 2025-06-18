@@ -25,4 +25,11 @@ testbin/*
 *~
 .golangci.mktmp.yml
 
+# Operator SDK bundle artifacts
+bundle/
+bundle.Dockerfile
+.openshift
+catalog-item
+config/manifests/bases/llama-stack-k8s-operator.clusterserviceversion.yaml
+
 .DS_Store

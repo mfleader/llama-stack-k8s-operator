@@ -56,6 +56,13 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 		MountPath: mountPath,
 	})
 
+	if len(instance.Spec.Server.ContainerSpec.Command) > 0 {
+		container.Command = instance.Spec.Server.ContainerSpec.Command
+	}
+
+	if len(instance.Spec.Server.ContainerSpec.Args) > 0 {
+		container.Args = instance.Spec.Server.ContainerSpec.Args
+	}
 	return container
 }
 
@@ -72,7 +79,7 @@ func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, contain
 			Name: "lls-storage",
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: instance.Name,
+					ClaimName: instance.Name + "-pvc",
 				},
 			},
 		})

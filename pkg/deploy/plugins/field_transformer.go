@@ -6,39 +6,42 @@ import (
 
 	"sigs.k8s.io/kustomize/api/resmap"
 	"sigs.k8s.io/kustomize/api/resource"
+	"sigs.k8s.io/yaml"
 )
 
-// FieldMapping defines a single field mapping
+// FieldMapping defines a single field mapping.
 type FieldMapping struct {
-	// SourceValue is the value to copy to the target field
-	SourceValue interface{} `json:"sourceValue"`
-	// TargetField is the dot-notation path to the field in the target object
+	// SourceValue is the value to copy to the target field.
+	SourceValue any `json:"sourceValue"`
+	// DefaultValue is the value to use if SourceValue is empty.
+	// This provides a fallback mechanism, making transformations more robust.
+	DefaultValue any `json:"defaultValue,omitempty"`
+	// TargetField is the dot-notation path to the field in the target object.
 	TargetField string `json:"targetField"`
-	// TargetKind is the kind of resource to apply the transformation to
+	// TargetKind is the kind of resource to apply the transformation to.
 	TargetKind string `json:"targetKind"`
-	// CreateIfNotExists will create the target field if it doesn't exist
+	// CreateIfNotExists will create the target field and any intermediate
+	// map structures if they don't exist in the target resource.
 	CreateIfNotExists bool `json:"createIfNotExists,omitempty"`
 }
 
-// FieldTransformerConfig holds configuration for the field transformer
+// FieldTransformerConfig holds configuration for the field transformer.
 type FieldTransformerConfig struct {
-	// Mappings is a list of field mappings to apply
+	// Mappings is a list of field mappings to apply.
 	Mappings []FieldMapping `json:"mappings"`
 }
 
-// CreateFieldTransformer creates a transformer plugin that copies values between fields
-func CreateFieldTransformer(config FieldTransformerConfig) resmap.TransformerPlugin {
-	return &fieldTransformer{
-		config: config,
-	}
+// CreateFieldTransformer creates a transformer plugin that copies values between fields.
+func CreateFieldTransformer(config FieldTransformerConfig) *fieldTransformer {
+	return &fieldTransformer{config: config}
 }
 
 type fieldTransformer struct {
 	config FieldTransformerConfig
 }
 
-// isEmpty checks if a value is nil or empty
-func isEmpty(v interface{}) bool {
+// isEmpty checks if a value is nil or an empty string, slice, or map.
+func isEmpty(v any) bool {
 	if v == nil {
 		return true
 	}
@@ -46,9 +49,9 @@ func isEmpty(v interface{}) bool {
 	switch val := v.(type) {
 	case string:
 		return val == ""
-	case map[string]interface{}:
+	case map[string]any:
 		return len(val) == 0
-	case []interface{}:
+	case []any:
 		return len(val) == 0
 	}
 
@@ -56,21 +59,24 @@ func isEmpty(v interface{}) bool {
 }
 
 func (t *fieldTransformer) Transform(m resmap.ResMap) error {
-	// Process each mapping
 	for _, mapping := range t.config.Mappings {
-		// Skip if source value is empty
-		if isEmpty(mapping.SourceValue) {
+		// Get the value to use, falling back to the default if the source is empty.
+		value := mapping.SourceValue
+		if isEmpty(value) {
+			value = mapping.DefaultValue
+		}
+
+		// Skip this mapping if both source and default values are empty.
+		if isEmpty(value) {
 			continue
 		}
 
-		// Apply the transformation to matching resources
 		for _, res := range m.Resources() {
 			if res.GetKind() != mapping.TargetKind {
 				continue
 			}
 
-			// Set the target field
-			if err := t.setTargetField(res, mapping.SourceValue, mapping); err != nil {
+			if err := setTargetField(res, value, mapping); err != nil {
 				return fmt.Errorf("failed to set target field for mapping %s: %w", mapping.TargetField, err)
 			}
 		}
@@ -83,35 +89,57 @@ func (t *fieldTransformer) Config(h *resmap.PluginHelpers, _ []byte) error {
 	return nil
 }
 
-func (t *fieldTransformer) setTargetField(res *resource.Resource, value interface{}, mapping FieldMapping) error {
-	// Split the target field path
-	fields := strings.Split(mapping.TargetField, ".")
-
-	// Navigate to the target field
-	current, err := res.Map()
+// setTargetField modifies the resource by setting the specified value at the
+// given dot-notation path.
+func setTargetField(res *resource.Resource, value any, mapping FieldMapping) error {
+	yamlBytes, err := res.AsYAML()
 	if err != nil {
-		return fmt.Errorf("failed to get resource map: %w", err)
+		return fmt.Errorf("failed to get YAML: %w", err)
 	}
 
+	var data map[string]any
+	if unmarshalErr := yaml.Unmarshal(yamlBytes, &data); unmarshalErr != nil {
+		return fmt.Errorf("failed to unmarshal YAML: %w", unmarshalErr)
+	}
+
+	fields := strings.Split(mapping.TargetField, ".")
+	current := data
 	for _, field := range fields[:len(fields)-1] {
 		next, ok := current[field]
 		if !ok {
 			if !mapping.CreateIfNotExists {
-				return fmt.Errorf("field %s not found", field)
+				return fmt.Errorf("failed to find field %s", field)
 			}
-			next = make(map[string]interface{})
+			next = make(map[string]any)
 			current[field] = next
 		}
 
-		nextMap, ok := next.(map[string]interface{})
+		nextMap, ok := next.(map[string]any)
 		if !ok {
-			return fmt.Errorf("field %s is not a map", field)
+			return fmt.Errorf("failed to convert field %s to map", field)
 		}
 
 		current = nextMap
 	}
 
-	// Set the value
-	current[fields[len(fields)-1]] = value
+	lastField := fields[len(fields)-1]
+	current[lastField] = value
+
+	// After modifying the map, we must marshal it back to YAML and create a new
+	// resource object to ensure the internal state is consistent.
+	updatedYAML, err := yaml.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated YAML: %w", err)
+	}
+
+	rf := resource.NewFactory(nil)
+	newRes, err := rf.FromBytes(updatedYAML)
+	if err != nil {
+		return fmt.Errorf("failed to create resource from updated YAML: %w", err)
+	}
+
+	// Atomically replace the old resource content with the new, fully updated content
+	// to prevent partial updates or data loss.
+	res.ResetRNode(newRes)
 	return nil
 }

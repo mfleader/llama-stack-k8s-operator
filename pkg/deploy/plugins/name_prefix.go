@@ -1,10 +1,12 @@
 package plugins
 
 import (
+	"fmt"
+
 	"sigs.k8s.io/kustomize/api/resmap"
 )
 
-// NamePrefixConfig holds configuration for the name prefix plugin
+// NamePrefixConfig holds configuration for the name prefix plugin.
 type NamePrefixConfig struct {
 	// Prefix to add to resource names
 	Prefix string
@@ -15,11 +17,9 @@ type NamePrefixConfig struct {
 	ExcludeKinds []string
 }
 
-// CreateNamePrefixPlugin creates a transformer plugin that adds a prefix to resource names
-func CreateNamePrefixPlugin(config NamePrefixConfig) resmap.TransformerPlugin {
-	return &namePrefixTransformer{
-		config: config,
-	}
+// CreateNamePrefixPlugin creates a transformer plugin that adds a prefix to resource names.
+func CreateNamePrefixPlugin(config NamePrefixConfig) *namePrefixTransformer {
+	return &namePrefixTransformer{config: config}
 }
 
 type namePrefixTransformer struct {
@@ -39,7 +39,9 @@ func (t *namePrefixTransformer) Transform(m resmap.ResMap) error {
 		}
 
 		// Add prefix to resource name
-		res.SetName(t.config.Prefix + "-" + res.GetName())
+		if err := res.SetName(t.config.Prefix + "-" + res.GetName()); err != nil {
+			return fmt.Errorf("failed to set resource name: %w", err)
+		}
 	}
 	return nil
 }
@@ -48,7 +50,7 @@ func (t *namePrefixTransformer) Config(h *resmap.PluginHelpers, _ []byte) error 
 	return nil
 }
 
-// shouldApplyToKind checks if a transformation should be applied to a resource kind
+// shouldApplyToKind checks if a transformation should be applied to a resource kind.
 func shouldApplyToKind(kind string, includeKinds, excludeKinds []string) bool {
 	// If exclude list is not empty and kind is in it, don't apply
 	if len(excludeKinds) > 0 {
@@ -74,7 +76,7 @@ func shouldApplyToKind(kind string, includeKinds, excludeKinds []string) bool {
 	return false
 }
 
-// hasPrefix checks if a string has a given prefix
+// hasPrefix checks if a string has a given prefix.
 func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
