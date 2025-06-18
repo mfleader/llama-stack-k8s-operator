@@ -23,7 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sync"
+	"os"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -80,8 +80,8 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 	// The logger is retrieved from the context in each sub-function that needs it, maintaining
 	// the request-specific values throughout the call chain.
 	// Always ensure the name of the CR and the namespace are included in the logger.
-	log := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name)
-	ctx = logr.NewContext(ctx, log)
+	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name)
+	ctx = logr.NewContext(ctx, logger)
 
 	// Fetch the LlamaStack instance
 	instance, err := r.fetchInstance(ctx, req.NamespacedName)
@@ -90,31 +90,44 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 	}
 
 	if instance == nil {
-		log.Info("LlamaStackDistribution resource not found, skipping reconciliation")
+		logger.Info("LlamaStackDistribution resource not found, skipping reconciliation")
 		return ctrl.Result{}, nil
 	}
 
-	// Reconcile all resources
-	if err := r.reconcileResources(ctx, instance); err != nil {
-		return ctrl.Result{}, err
+	// Reconcile all resources, storing the error for later.
+	reconcileErr := r.reconcileResources(ctx, instance)
+
+	// Update the status, passing in any reconciliation error.
+	if statusUpdateErr := r.updateStatus(ctx, instance, reconcileErr); statusUpdateErr != nil {
+		// Log the status update error, but prioritize the reconciliation error for return.
+		logger.Error(statusUpdateErr, "failed to update status")
+		if reconcileErr != nil {
+			return ctrl.Result{}, reconcileErr
+		}
+		return ctrl.Result{}, statusUpdateErr
 	}
 
-	// Check if requeue is needed
-	if !instance.Status.Ready {
+	// If reconciliation failed, return the error to trigger a requeue.
+	if reconcileErr != nil {
+		return ctrl.Result{}, reconcileErr
+	}
+
+	// Check if requeue is needed based on phase
+	if instance.Status.Phase == llamav1alpha1.LlamaStackDistributionPhaseInitializing {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	log.Info("Successfully reconciled LlamaStackDistribution")
+	logger.Info("Successfully reconciled LlamaStackDistribution")
 	return ctrl.Result{}, nil
 }
 
 // fetchInstance retrieves the LlamaStackDistribution instance.
 func (r *LlamaStackDistributionReconciler) fetchInstance(ctx context.Context, namespacedName types.NamespacedName) (*llamav1alpha1.LlamaStackDistribution, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	instance := &llamav1alpha1.LlamaStackDistribution{}
 	if err := r.Get(ctx, namespacedName, instance); err != nil {
 		if k8serrors.IsNotFound(err) {
-			log.Info("failed to find LlamaStackDistribution resource")
+			logger.Info("failed to find LlamaStackDistribution resource")
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to fetch LlamaStackDistribution: %w", err)
@@ -151,12 +164,6 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 			return fmt.Errorf("failed to reconcile service: %w", err)
 		}
 	}
-
-	// Update status
-	if err := r.updateStatus(ctx, instance); err != nil {
-		return fmt.Errorf("failed to update status: %w", err)
-	}
-
 	return nil
 }
 
@@ -257,7 +264,7 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 
 // reconcileService manages the Service if ports are defined.
 func (r *LlamaStackDistributionReconciler) reconcileService(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	// Use the container's port (defaulted to 8321 if unset)
 	port := deploy.GetServicePort(instance)
 
@@ -282,7 +289,7 @@ func (r *LlamaStackDistributionReconciler) reconcileService(ctx context.Context,
 		},
 	}
 
-	return deploy.ApplyService(ctx, r.Client, r.Scheme, instance, service, log)
+	return deploy.ApplyService(ctx, r.Client, r.Scheme, instance, service, logger)
 }
 
 // getServerURL returns the URL for the LlamaStack server.
@@ -357,86 +364,39 @@ func (r *LlamaStackDistributionReconciler) getProviderInfo(ctx context.Context, 
 	return response.Data, nil
 }
 
-// updateStatus refreshes the LlamaStackDistribution status.
-func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	log := log.FromContext(ctx)
-
-	deployment := &appsv1.Deployment{}
-	err := r.Get(ctx, types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, deployment)
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to fetch deployment for status: %w", err)
+// updateStatus refreshes the LlamaStack status.
+func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution, reconcileErr error) error {
+	// Initialize OperatorVersion if not set
+	if instance.Status.Version.OperatorVersion == "" {
+		instance.Status.Version.OperatorVersion = os.Getenv("OPERATOR_VERSION")
 	}
 
-	// Check if deployment is ready
-	expectedReplicas := instance.Spec.Replicas
-	deploymentReady := err == nil && deployment.Status.ReadyReplicas == expectedReplicas
-
-	// Update available distributions and active distribution
-	instance.Status.DistributionConfig.AvailableDistributions = r.ClusterInfo.DistributionImages
-	if instance.Spec.Server.Distribution.Name != "" {
-		instance.Status.DistributionConfig.ActiveDistribution = instance.Spec.Server.Distribution.Name
-	} else if instance.Spec.Server.Distribution.Image != "" {
-		instance.Status.DistributionConfig.ActiveDistribution = "custom"
-	}
-
-	// Only check health and providers if deployment is ready
-	if deploymentReady {
-		// Use goroutines for concurrent health and provider checks
-		// Use a channel of size 1 to avoid goroutine leaks due to blocking sends
-		var wg sync.WaitGroup
-		healthChan := make(chan struct {
-			healthy bool
-			err     error
-		}, 1)
-		providersChan := make(chan struct {
-			providers []llamav1alpha1.ProviderInfo
-			err       error
-		}, 1)
-
-		// Check health endpoint in a goroutine
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			healthy, err := r.checkHealth(ctx, instance)
-			healthChan <- struct {
-				healthy bool
-				err     error
-			}{healthy, err}
-		}()
-
-		// Get provider information in a goroutine
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			providers, err := r.getProviderInfo(ctx, instance)
-			providersChan <- struct {
-				providers []llamav1alpha1.ProviderInfo
-				err       error
-			}{providers, err}
-		}()
-
-		// Wait for both goroutines to complete and collect results
-		wg.Wait()
-
-		// Process health check results by reading from the channel
-		healthResult := <-healthChan
-		if healthResult.err != nil {
-			log.Error(healthResult.err, "failed to check health endpoint")
-		} else {
-			instance.Status.Ready = healthResult.healthy
-		}
-
-		// Process provider information results
-		providersResult := <-providersChan
-		if providersResult.err != nil {
-			log.Error(providersResult.err, "failed to get provider information")
-		} else {
-			instance.Status.DistributionConfig.Providers = providersResult.providers
-		}
+	// A reconciliation error is the highest priority. It overrides all other status checks.
+	if reconcileErr != nil {
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseFailed
+		SetDeploymentReadyCondition(&instance.Status, false, fmt.Sprintf("Resource reconciliation failed: %v", reconcileErr))
 	} else {
-		instance.Status.Ready = false
+		// If reconciliation was successful, proceed with detailed status checks.
+		deploymentReady, err := r.updateDeploymentStatus(ctx, instance)
+		if err != nil {
+			return err // Early exit if we can't get deployment status
+		}
+
+		r.updateStorageStatus(ctx, instance)
+		r.updateServiceStatus(ctx, instance)
+		r.updateDistributionConfig(instance)
+
+		if deploymentReady {
+			r.performHealthChecks(ctx, instance)
+		} else {
+			// If not ready, health can't be checked. Set condition appropriately.
+			SetHealthCheckCondition(&instance.Status, false, "Deployment not ready")
+			instance.Status.DistributionConfig.Providers = nil // Clear providers
+		}
 	}
 
+	// Always update the status at the end of the function.
+	instance.Status.Version.LastUpdated = metav1.NewTime(metav1.Now().UTC())
 	if err := r.Status().Update(ctx, instance); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
@@ -444,9 +404,117 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 	return nil
 }
 
+func (r *LlamaStackDistributionReconciler) updateDeploymentStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (bool, error) {
+	deployment := &appsv1.Deployment{}
+	deploymentErr := r.Get(ctx, types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace}, deployment)
+	if deploymentErr != nil && !k8serrors.IsNotFound(deploymentErr) {
+		return false, fmt.Errorf("failed to fetch deployment for status: %w", deploymentErr)
+	}
+
+	deploymentReady := false
+
+	switch {
+	case deploymentErr != nil: // This case covers when the deployment is not found
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhasePending
+		SetDeploymentReadyCondition(&instance.Status, false, MessageDeploymentPending)
+	case deployment.Status.ReadyReplicas == 0:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseInitializing
+		SetDeploymentReadyCondition(&instance.Status, false, MessageDeploymentPending)
+	case deployment.Status.ReadyReplicas < instance.Spec.Replicas:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseInitializing
+		deploymentMessage := fmt.Sprintf("Deployment is scaling: %d/%d replicas ready", deployment.Status.ReadyReplicas, instance.Spec.Replicas)
+		SetDeploymentReadyCondition(&instance.Status, false, deploymentMessage)
+	case deployment.Status.ReadyReplicas > instance.Spec.Replicas:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseInitializing
+		deploymentMessage := fmt.Sprintf("Deployment is scaling down: %d/%d replicas ready", deployment.Status.ReadyReplicas, instance.Spec.Replicas)
+		SetDeploymentReadyCondition(&instance.Status, false, deploymentMessage)
+	default:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseReady
+		deploymentReady = true
+		SetDeploymentReadyCondition(&instance.Status, true, MessageDeploymentReady)
+		if instance.Status.Version.LlamaStackVersion == "" {
+			instance.Status.Version.LlamaStackVersion = os.Getenv("LLAMA_STACK_VERSION")
+		}
+	}
+	instance.Status.AvailableReplicas = deployment.Status.ReadyReplicas
+	return deploymentReady, nil
+}
+
+func (r *LlamaStackDistributionReconciler) updateStorageStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) {
+	if instance.Spec.Server.Storage == nil {
+		return
+	}
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: instance.Name + "-pvc", Namespace: instance.Namespace}, pvc)
+	if err != nil {
+		SetStorageReadyCondition(&instance.Status, false, fmt.Sprintf("Failed to get PVC: %v", err))
+		return
+	}
+
+	ready := pvc.Status.Phase == corev1.ClaimBound
+	var message string
+	if ready {
+		message = MessageStorageReady
+	} else {
+		message = fmt.Sprintf("PVC is not bound: %s", pvc.Status.Phase)
+	}
+	SetStorageReadyCondition(&instance.Status, ready, message)
+}
+
+func (r *LlamaStackDistributionReconciler) updateServiceStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) {
+	logger := log.FromContext(ctx)
+	if !instance.HasPorts() {
+		logger.Info("No ports defined, skipping service status update")
+		return
+	}
+	service := &corev1.Service{}
+	err := r.Get(ctx, types.NamespacedName{Name: instance.Name + "-service", Namespace: instance.Namespace}, service)
+	if err != nil {
+		SetServiceReadyCondition(&instance.Status, false, fmt.Sprintf("Failed to get Service: %v", err))
+		return
+	}
+	SetServiceReadyCondition(&instance.Status, true, MessageServiceReady)
+}
+
+func (r *LlamaStackDistributionReconciler) updateDistributionConfig(instance *llamav1alpha1.LlamaStackDistribution) {
+	instance.Status.DistributionConfig.AvailableDistributions = r.ClusterInfo.DistributionImages
+	var activeDistribution string
+	if instance.Spec.Server.Distribution.Name != "" {
+		activeDistribution = instance.Spec.Server.Distribution.Name
+	} else if instance.Spec.Server.Distribution.Image != "" {
+		activeDistribution = "custom"
+	}
+	instance.Status.DistributionConfig.ActiveDistribution = activeDistribution
+}
+
+func (r *LlamaStackDistributionReconciler) performHealthChecks(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) {
+	logger := log.FromContext(ctx)
+
+	healthy, err := r.checkHealth(ctx, instance)
+	switch {
+	case err != nil:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseInitializing
+		SetHealthCheckCondition(&instance.Status, false, fmt.Sprintf("Health check failed: %v", err))
+	case !healthy:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseFailed
+		SetHealthCheckCondition(&instance.Status, false, MessageHealthCheckFailed)
+	default:
+		instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseReady
+		SetHealthCheckCondition(&instance.Status, true, MessageHealthCheckPassed)
+	}
+
+	providers, err := r.getProviderInfo(ctx, instance)
+	if err != nil {
+		logger.Error(err, "failed to get provider info, clearing provider list")
+		instance.Status.DistributionConfig.Providers = nil
+	} else {
+		instance.Status.DistributionConfig.Providers = providers
+	}
+}
+
 // reconcileNetworkPolicy manages the NetworkPolicy for the LlamaStack server.
 func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	networkPolicy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instance.Name + "-network-policy",
@@ -456,7 +524,7 @@ func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Co
 
 	// If feature is disabled, delete the NetworkPolicy if it exists
 	if !r.EnableNetworkPolicy {
-		return deploy.HandleDisabledNetworkPolicy(ctx, r.Client, networkPolicy, log)
+		return deploy.HandleDisabledNetworkPolicy(ctx, r.Client, networkPolicy, logger)
 	}
 
 	port := deploy.GetServicePort(instance)
@@ -521,7 +589,7 @@ func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Co
 		},
 	}
 
-	return deploy.ApplyNetworkPolicy(ctx, r.Client, r.Scheme, instance, networkPolicy, log)
+	return deploy.ApplyNetworkPolicy(ctx, r.Client, r.Scheme, instance, networkPolicy, logger)
 }
 
 // createDefaultConfigMap creates a ConfigMap with default feature flag values.
