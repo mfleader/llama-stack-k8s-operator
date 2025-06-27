@@ -173,6 +173,9 @@ jobs:
       operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
       release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Trigger release image build
         run: |
           gh workflow run release-image.yml \
