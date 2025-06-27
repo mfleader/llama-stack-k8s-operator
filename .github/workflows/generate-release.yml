@@ -84,6 +84,12 @@ jobs:
           # Use the new make release command
           make release VERSION=$operator_version LLAMASTACK_VERSION=$llamastack_version
 
+      - name: Build release image (validation gate)
+        run: |
+          # Build the image to validate it works before creating PR
+          make docker-build IMG=quay.io/llamastack/llama-stack-k8s-operator:v$operator_version
+          echo "✅ Image built successfully: quay.io/llamastack/llama-stack-k8s-operator:v$operator_version"
+
       - name: Commit changes
         run: |
           git add .
@@ -107,151 +113,18 @@ jobs:
               --head "$temp_branch" \
               --title "Release v$operator_version" \
               --body "## Automated Release Preparation
-          
-          - Updated operator version to v$operator_version
-          - Updated LlamaStack distributions to $llamastack_version  
-          - Generated updated release manifests
-          
-          This PR will be automatically merged once all checks pass."
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Wait for PR checks and merge
-        run: |
-          echo "Waiting for PR checks to complete..."
-          
-          for i in {1..60}; do
-            pr_info=$(gh pr view "$temp_branch" --json mergeable,mergeStateStatus,statusCheckRollupState)
-            mergeable=$(echo "$pr_info" | jq -r '.mergeable')
-            merge_state=$(echo "$pr_info" | jq -r '.mergeStateStatus') 
-            check_state=$(echo "$pr_info" | jq -r '.statusCheckRollupState')
-            
-            echo "PR State: mergeable=$mergeable, merge_state=$merge_state, checks=$check_state"
-            
-            if [[ "$check_state" == "SUCCESS" && "$mergeable" == "MERGEABLE" ]]; then
-              echo "✅ All checks passed! Merging PR..."
-              gh pr merge "$temp_branch" --squash --delete-branch
-              break
-            elif [[ "$check_state" == "FAILURE" || "$check_state" == "ERROR" ]]; then
-              echo "❌ PR checks failed"
-              exit 1
-            elif [[ "$merge_state" == "CLOSED" ]]; then
-              echo "❌ PR was manually closed - release rejected"
-              exit 1
-            fi
-            
-            if [[ $i -eq 60 ]]; then
-              echo "❌ Timeout waiting for PR checks"
-              exit 1
-            fi
-            
-            sleep 30
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  trigger-release-build:
-    needs: [validate-inputs, update-files]
-    runs-on: ubuntu-24.04
-    env:
-      operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
-      release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Trigger release image build
-        run: |
-          gh workflow run release-image.yml \
-            -f version="v$operator_version" \
-            -f release_branch="$release_branch" \
-            --ref "$release_branch"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Wait for release build
-        run: |
-          echo "Waiting for release build to start..."
-          sleep 10  # Give workflow time to start
-
-          for i in {1..60}; do
-            run_info=$(gh run list --workflow=release-image.yml --branch=$release_branch --limit=1 --json status,conclusion)
-            status=$(echo "$run_info" | jq -r '.[0].status')
-            conclusion=$(echo "$run_info" | jq -r '.[0].conclusion')
-
-            echo "Build status: $status"
-
-            if [[ "$status" == "completed" ]]; then
-              if [[ "$conclusion" == "success" ]]; then
-                echo "✅ Release build completed successfully!"
-                break
-              else
-                echo "❌ Release build failed with conclusion: $conclusion"
-                exit 1
-              fi
-            fi
-
-            if [[ $i -eq 60 ]]; then
-              echo "❌ Timeout waiting for release build"
-              exit 1
-            fi
-
-            sleep 30
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  create-github-release:
-    needs: [validate-inputs, trigger-release-build]
-    runs-on: ubuntu-24.04
-    env:
-      operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
-      llamastack_version: ${{ needs.validate-inputs.outputs.llamastack_version }}
-    steps:
-      - name: Checkout release branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-inputs.outputs.release_branch }}
-          fetch-depth: 0  # Need full history to create tags
-
-      - name: Create release tag
-        run: |
-          git config user.name "${{ env.GIT_USER_NAME }}"
-          git config user.email "${{ env.GIT_USER_EMAIL }}"
-
-          git tag -a "v$operator_version" -m "Release v$operator_version"
-          git push origin "v$operator_version"
-
-      - name: Create GitHub Release
-        run: |
-          RELEASE_NOTES="## What's Changed
 
           - Updated operator version to v$operator_version
           - Updated LlamaStack distributions to $llamastack_version
           - Generated updated release manifests
 
-          ## Installation
-
-          Install the operator using kubectl:
-
-          \`\`\`bash
-          kubectl apply -f https://raw.githubusercontent.com/llamastack/llama-stack-k8s-operator/v$operator_version/release/operator.yaml
-          \`\`\`
-
-          ## Container Images
-
-          - Operator: \`quay.io/llamastack/llama-stack-k8s-operator:v$operator_version\`
-          - LlamaStack distributions: \`docker.io/llamastack/distribution-*:$llamastack_version\`"
-
-          gh release create "v$operator_version" \
-            --title "Release v$operator_version" \
-            --notes "$RELEASE_NOTES"
+          This PR will be automatically merged once all checks pass."
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
 
   cleanup-failed-release:
-    needs: [validate-inputs, update-files, trigger-release-build, create-github-release]
+    needs: [validate-inputs, update-files]
     runs-on: ubuntu-24.04
     if: failure()
     env:
@@ -268,14 +141,14 @@ jobs:
       - name: Cleanup failed release attempt
         run: |
           echo "Cleaning up failed release attempt..."
-          
+
           # 1. Check for orphaned temporary branches (only cleanup if no active PR)
           temp_branches=$(git ls-remote --heads origin | grep "refs/heads/temp-release-v${{ needs.validate-inputs.outputs.operator_version }}" | cut -f2 | sed 's|refs/heads/||' || true)
           for temp_branch in $temp_branches; do
             # Check if there's an open PR for this branch
             pr_info=$(gh pr list --head "$temp_branch" --json number,state 2>/dev/null || echo "[]")
             pr_count=$(echo "$pr_info" | jq '. | length')
-            
+
             if [[ "$pr_count" == "0" ]]; then
               echo "No PR found for $temp_branch - deleting orphaned branch"
               git push origin --delete "$temp_branch" || echo "Failed to delete $temp_branch"
@@ -284,7 +157,7 @@ jobs:
               echo "PR info: $(echo "$pr_info" | jq -r '.[0] | "#\(.number) (\(.state))"')"
             fi
           done
-          
+
           # 2. Only rename release branch if PR failed to merge (code issues)
           # If PR merged successfully, release branch has valid code - don't rename it
           if git ls-remote --heads origin | grep -q "refs/heads/$release_branch$"; then
@@ -294,5 +167,7 @@ jobs:
           else
             echo "ℹ️  Release branch $release_branch doesn't exist - PR likely never merged"
           fi
-          
+
           echo "Cleanup completed"
+        env:
+          GH_TOKEN: ${{ github.token }}
