@@ -105,8 +105,8 @@ jobs:
 
       - name: Create release PR
         run: |
-          if git diff --quiet HEAD~1; then
-            echo "No changes to create PR for"
+          if git diff --staged --quiet; then
+            echo "No changes to commit, skipping PR creation"
           else
             gh pr create \
               --base "$release_branch" \
@@ -119,9 +119,10 @@ jobs:
           - Generated updated release manifests
 
           This PR will be automatically merged once all checks pass."
+            echo "✅ Created release PR"
           fi
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
 
   cleanup-failed-release:
     needs: [validate-inputs, update-files]
@@ -129,6 +130,7 @@ jobs:
     if: failure()
     env:
       release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
+      operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -142,32 +144,14 @@ jobs:
         run: |
           echo "Cleaning up failed release attempt..."
 
-          # 1. Check for orphaned temporary branches (only cleanup if no active PR)
-          temp_branches=$(git ls-remote --heads origin | grep "refs/heads/temp-release-v${{ needs.validate-inputs.outputs.operator_version }}" | cut -f2 | sed 's|refs/heads/||' || true)
-          for temp_branch in $temp_branches; do
-            # Check if there's an open PR for this branch
-            pr_info=$(gh pr list --head "$temp_branch" --json number,state 2>/dev/null || echo "[]")
-            pr_count=$(echo "$pr_info" | jq '. | length')
+          # Find and delete temporary branches for this release version
+          temp_branches=$(git ls-remote --heads origin | grep "refs/heads/temp-release-v$operator_version" | cut -f2 | sed 's|refs/heads/||' || true)
 
-            if [[ "$pr_count" == "0" ]]; then
-              echo "No PR found for $temp_branch - deleting orphaned branch"
-              git push origin --delete "$temp_branch" || echo "Failed to delete $temp_branch"
-            else
-              echo "Active PR exists for $temp_branch - leaving branch intact"
-              echo "PR info: $(echo "$pr_info" | jq -r '.[0] | "#\(.number) (\(.state))"')"
-            fi
+          for temp_branch in $temp_branches; do
+            echo "🧹 Deleting temp branch: $temp_branch"
+            git push origin --delete "$temp_branch" || echo "Failed to delete $temp_branch"
           done
 
-          # 2. Only rename release branch if PR failed to merge (code issues)
-          # If PR merged successfully, release branch has valid code - don't rename it
-          if git ls-remote --heads origin | grep -q "refs/heads/$release_branch$"; then
-            echo "ℹ️  Release branch $release_branch exists - PR may have merged successfully"
-            echo "ℹ️  Not renaming release branch since failure might be in post-merge pipeline"
-            echo "ℹ️  Manual investigation needed to determine if branch should be rolled back"
-          else
-            echo "ℹ️  Release branch $release_branch doesn't exist - PR likely never merged"
-          fi
-
-          echo "Cleanup completed"
+          echo "✅ Cleanup completed"
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
