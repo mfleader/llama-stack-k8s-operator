@@ -68,10 +68,11 @@ jobs:
           git config user.name "${{ env.GIT_USER_NAME }}"
           git config user.email "${{ env.GIT_USER_EMAIL }}"
 
-      - name: Create and push release branch
+      - name: Create temporary release branch
         run: |
-          git checkout -b "$release_branch"
-          git push origin "$release_branch"
+          temp_branch="temp-release-v$operator_version-$(date +%Y%m%d-%H%M%S)"
+          echo "temp_branch=$temp_branch" >> $GITHUB_ENV
+          git checkout -b "$temp_branch"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -93,81 +94,65 @@ jobs:
                          -m "- Update operator version to v$operator_version" \
                          -m "- Update LlamaStack distributions to $llamastack_version" \
                          -m "- Generate release manifests"
-            git push origin $release_branch
+            git push origin $temp_branch
           fi
 
-  run-tests:
-    needs: [validate-inputs, update-files]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout release branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-inputs.outputs.release_branch }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Run tests
+      - name: Create release PR
         run: |
-          make test
+          if git diff --quiet HEAD~1; then
+            echo "No changes to create PR for"
+          else
+            gh pr create \
+              --base "$release_branch" \
+              --head "$temp_branch" \
+              --title "Release v$operator_version" \
+              --body "## Automated Release Preparation
+          
+          - Updated operator version to v$operator_version
+          - Updated LlamaStack distributions to $llamastack_version  
+          - Generated updated release manifests
+          
+          This PR will be automatically merged once all checks pass."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-      - name: Run linting
+      - name: Wait for PR checks and merge
         run: |
-          make lint
-
-  # run-e2e-tests:
-  #   needs: [validate-inputs, update-files]
-  #   runs-on: ubuntu-24.04
-  #   env:
-  #     release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-
-  #     - name: Trigger E2E tests
-  #       run: |
-  #         gh workflow run run-e2e-test.yml \
-  #           --ref "$release_branch"
-  #       env:
-  #         GH_TOKEN: ${{ github.token }}
-
-  #     - name: Wait for E2E tests
-  #       run: |
-  #         echo "Waiting for E2E tests to start..."
-  #         sleep 10  # Give workflow time to start
-
-  #         for i in {1..60}; do
-  #           run_info=$(gh run list --workflow=run-e2e-test.yml --branch=$release_branch --limit=1 --json status,conclusion)
-  #           status=$(echo "$run_info" | jq -r '.[0].status')
-  #           conclusion=$(echo "$run_info" | jq -r '.[0].conclusion')
-
-  #           echo "E2E test status: $status"
-
-  #           if [[ "$status" == "completed" ]]; then
-  #             if [[ "$conclusion" == "success" ]]; then
-  #               echo "✅ E2E tests completed successfully!"
-  #               break
-  #             else
-  #               echo "❌ E2E tests failed with conclusion: $conclusion"
-  #               exit 1
-  #             fi
-  #           fi
-
-  #           if [[ $i -eq 60 ]]; then
-  #             echo "❌ Timeout waiting for E2E tests"
-  #             exit 1
-  #           fi
-
-  #           sleep 30
-  #         done
-  #       env:
-  #         GH_TOKEN: ${{ github.token }}
+          echo "Waiting for PR checks to complete..."
+          
+          for i in {1..60}; do
+            pr_info=$(gh pr view "$temp_branch" --json mergeable,mergeStateStatus,statusCheckRollupState)
+            mergeable=$(echo "$pr_info" | jq -r '.mergeable')
+            merge_state=$(echo "$pr_info" | jq -r '.mergeStateStatus') 
+            check_state=$(echo "$pr_info" | jq -r '.statusCheckRollupState')
+            
+            echo "PR State: mergeable=$mergeable, merge_state=$merge_state, checks=$check_state"
+            
+            if [[ "$check_state" == "SUCCESS" && "$mergeable" == "MERGEABLE" ]]; then
+              echo "✅ All checks passed! Merging PR..."
+              gh pr merge "$temp_branch" --squash --delete-branch
+              break
+            elif [[ "$check_state" == "FAILURE" || "$check_state" == "ERROR" ]]; then
+              echo "❌ PR checks failed"
+              exit 1
+            elif [[ "$merge_state" == "CLOSED" ]]; then
+              echo "❌ PR was manually closed - release rejected"
+              exit 1
+            fi
+            
+            if [[ $i -eq 60 ]]; then
+              echo "❌ Timeout waiting for PR checks"
+              exit 1
+            fi
+            
+            sleep 30
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   trigger-release-build:
-    needs: [validate-inputs, run-tests]
+    needs: [validate-inputs, update-files]
     runs-on: ubuntu-24.04
     env:
       operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
@@ -266,7 +251,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   cleanup-failed-release:
-    needs: [validate-inputs, update-files, run-tests, trigger-release-build, create-github-release]
+    needs: [validate-inputs, update-files, trigger-release-build, create-github-release]
     runs-on: ubuntu-24.04
     if: failure()
     env:
@@ -280,19 +265,34 @@ jobs:
           git config user.name "${{ env.GIT_USER_NAME }}"
           git config user.email "${{ env.GIT_USER_EMAIL }}"
 
-      - name: Rename failed release branch
+      - name: Cleanup failed release attempt
         run: |
-          failed_branch="${release_branch}-failed-$(date +%Y%m%d-%H%M%S)"
-          echo "Renaming failed release branch to: $failed_branch"
-
-          # Fetch the release branch and rename it
-          git fetch origin "$release_branch" || echo "Branch may not exist yet"
-          if git show-ref --verify --quiet "refs/remotes/origin/$release_branch"; then
-            git checkout "$release_branch"
-            git checkout -b "$failed_branch"
-            git push origin "$failed_branch"
-            git push origin --delete "$release_branch"
-            echo "✅ Renamed $release_branch to $failed_branch"
+          echo "Cleaning up failed release attempt..."
+          
+          # 1. Check for orphaned temporary branches (only cleanup if no active PR)
+          temp_branches=$(git ls-remote --heads origin | grep "refs/heads/temp-release-v${{ needs.validate-inputs.outputs.operator_version }}" | cut -f2 | sed 's|refs/heads/||' || true)
+          for temp_branch in $temp_branches; do
+            # Check if there's an open PR for this branch
+            pr_info=$(gh pr list --head "$temp_branch" --json number,state 2>/dev/null || echo "[]")
+            pr_count=$(echo "$pr_info" | jq '. | length')
+            
+            if [[ "$pr_count" == "0" ]]; then
+              echo "No PR found for $temp_branch - deleting orphaned branch"
+              git push origin --delete "$temp_branch" || echo "Failed to delete $temp_branch"
+            else
+              echo "Active PR exists for $temp_branch - leaving branch intact"
+              echo "PR info: $(echo "$pr_info" | jq -r '.[0] | "#\(.number) (\(.state))"')"
+            fi
+          done
+          
+          # 2. Only rename release branch if PR failed to merge (code issues)
+          # If PR merged successfully, release branch has valid code - don't rename it
+          if git ls-remote --heads origin | grep -q "refs/heads/$release_branch$"; then
+            echo "ℹ️  Release branch $release_branch exists - PR may have merged successfully"
+            echo "ℹ️  Not renaming release branch since failure might be in post-merge pipeline"
+            echo "ℹ️  Manual investigation needed to determine if branch should be rolled back"
           else
-            echo "ℹ️  Release branch $release_branch doesn't exist, nothing to cleanup"
+            echo "ℹ️  Release branch $release_branch doesn't exist - PR likely never merged"
           fi
+          
+          echo "Cleanup completed"
