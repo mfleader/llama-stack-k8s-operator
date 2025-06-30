@@ -98,7 +98,7 @@ jobs:
 
           echo "🎉 Created GitHub release v${{ steps.version.outputs.operator_version }}"
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Release complete
         run: |

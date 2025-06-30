@@ -122,7 +122,7 @@ jobs:
             echo "✅ Created release PR"
           fi
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
 
   cleanup-failed-release:
     needs: [validate-inputs, update-files]
@@ -154,4 +154,4 @@ jobs:
 
           echo "✅ Cleanup completed"
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
