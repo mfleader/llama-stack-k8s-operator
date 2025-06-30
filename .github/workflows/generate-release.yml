@@ -94,33 +94,51 @@ jobs:
         run: |
           git add .
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No changes to commit - release files are already up to date"
+            # Create empty commit to document the release attempt
+            git commit --allow-empty -s -m "Release v$operator_version (no changes needed)" \
+                       -m "- Release files are already up to date" \
+                       -m "- This documents the release attempt for v$operator_version"
+            echo "changes_committed=false" >> $GITHUB_ENV
           else
             git commit -s -m "Release v$operator_version" \
                          -m "- Update operator version to v$operator_version" \
                          -m "- Update LlamaStack distributions to $llamastack_version" \
                          -m "- Generate release manifests"
-            git push origin $temp_branch
+            echo "changes_committed=true" >> $GITHUB_ENV
           fi
+          git push origin $temp_branch
 
       - name: Create release PR
         run: |
-          if git diff --staged --quiet; then
-            echo "No changes to commit, skipping PR creation"
+          if [[ "$changes_committed" == "false" ]]; then
+            echo "Creating PR to document release attempt (no file changes needed)"
+            pr_title="Release v$operator_version (no changes needed)"
+            pr_body="## Automated Release Preparation
+
+          - Validated operator version v$operator_version
+          - Validated LlamaStack distributions $llamastack_version
+          - **No file changes were needed** - release files are already up to date
+
+          This PR documents the release attempt and can be merged to proceed with release."
           else
-            gh pr create \
-              --base "$release_branch" \
-              --head "$temp_branch" \
-              --title "Release v$operator_version" \
-              --body "## Automated Release Preparation
+            echo "Creating PR with release file updates"
+            pr_title="Release v$operator_version"
+            pr_body="## Automated Release Preparation
 
           - Updated operator version to v$operator_version
           - Updated LlamaStack distributions to $llamastack_version
           - Generated updated release manifests
 
           This PR will be automatically merged once all checks pass."
-            echo "✅ Created release PR"
           fi
+
+          gh pr create \
+            --base "$release_branch" \
+            --head "$temp_branch" \
+            --title "$pr_title" \
+            --body "$pr_body"
+          echo "✅ Created release PR"
         env:
           GH_TOKEN: ${{ github.token }}
 
