@@ -22,7 +22,7 @@ env:
   GO_VERSION: '1.23'
 
 jobs:
-  generate-and-finalize-release:
+  generate-release:
     runs-on: ubuntu-24.04
     outputs:
       operator_version: ${{ steps.validate.outputs.operator_version }}
@@ -140,7 +140,7 @@ jobs:
             exit $exit_code
           fi
 
-      - name: Run unit tests
+      - name: Run unit and integration tests
         run: |
           make test
 
@@ -218,6 +218,17 @@ jobs:
           echo "🎉 Created GitHub release v${{ env.operator_version }}"
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build release image
+        run: |
+          # Build the image before pushing
+          make docker-build IMG=quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}
+          echo "✅ Image built successfully: quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}"
 
       - name: Log in to Quay.io
         uses: docker/login-action@v3
