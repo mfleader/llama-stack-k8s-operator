@@ -206,8 +206,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: quay.io
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
+          username: ${{ secrets.APP_QUAY_USERNAME }}
+          password: ${{ secrets.APP_QUAY_TOKEN }}
 
       - name: Push release image
         run: |
