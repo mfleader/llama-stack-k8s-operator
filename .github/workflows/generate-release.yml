@@ -85,20 +85,42 @@ jobs:
           # Use the make release command to update all necessary files
           make release VERSION=${{ steps.validate.outputs.operator_version }} LLAMASTACK_VERSION=${{ steps.validate.outputs.llamastack_version }}
 
-      - name: Run pre-commit checks
-        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
-
-      - name: Commit pre-commit changes
+      - name: Install pre-commit
         run: |
-          if ! git diff --exit-code; then
-            git add .
-            git commit -s -m "Apply pre-commit fixes to release files" \
-                         -m "- Auto-format and regenerate release manifests" \
-                         -m "- Ensure consistency after release preparation"
-            git push origin "${{ steps.validate.outputs.release_branch }}"
-            echo "✅ Committed and pushed pre-commit changes"
+          python -m pip install pre-commit
+          pre-commit install --install-hooks
+
+      - name: Run pre-commit checks and handle file modifications
+        run: |
+          # Run pre-commit and capture exit code
+          set +e
+          pre-commit run --show-diff-on-failure --color=always --all-files
+          exit_code=$?
+          set -e
+          
+          if [ $exit_code -eq 0 ]; then
+            echo "✅ Pre-commit checks passed"
+          elif [ $exit_code -eq 1 ]; then
+            # Check if files were modified
+            if ! git diff --exit-code --quiet; then
+              echo "📝 Pre-commit hooks modified files - committing changes"
+              git add .
+              git commit -s -m "Apply pre-commit fixes for release ${{ steps.validate.outputs.operator_version }}" \
+                           -m "- Auto-format and regenerate release manifests" \
+                           -m "- Ensure consistency after release preparation"
+              git push origin "${{ steps.validate.outputs.release_branch }}"
+              
+              # Re-run pre-commit to ensure all checks pass
+              echo "🔄 Re-running pre-commit to verify all checks pass"
+              pre-commit run --show-diff-on-failure --color=always --all-files
+              echo "✅ Pre-commit checks passed after applying fixes"
+            else
+              echo "❌ Pre-commit failed but no files were modified - this indicates a real error"
+              exit 1
+            fi
           else
-            echo "✅ No changes needed from pre-commit"
+            echo "❌ Pre-commit failed with exit code $exit_code"
+            exit $exit_code
           fi
 
       - name: Run unit tests
