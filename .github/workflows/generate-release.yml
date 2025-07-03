@@ -165,12 +165,12 @@ jobs:
           fi
 
   finalize-release:
-    needs: generate-and-finalize-release
+    needs: generate-release
     runs-on: ubuntu-24.04
     env:
-      operator_version: ${{ needs.generate-and-finalize-release.outputs.operator_version }}
-      llamastack_version: ${{ needs.generate-and-finalize-release.outputs.llamastack_version }}
-      release_branch: ${{ needs.generate-and-finalize-release.outputs.release_branch }}
+      operator_version: ${{ needs.generate-release.outputs.operator_version }}
+      llamastack_version: ${{ needs.generate-release.outputs.llamastack_version }}
+      release_branch: ${{ needs.generate-release.outputs.release_branch }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
