@@ -15,7 +15,6 @@ on:
 permissions:
   contents: write
   actions: write
-  pull-requests: write
 
 env:
   GIT_USER_NAME: github-actions[bot]
@@ -23,7 +22,7 @@ env:
   GO_VERSION: '1.23'
 
 jobs:
-  validate-inputs:
+  generate-and-finalize-release:
     runs-on: ubuntu-24.04
     outputs:
       operator_version: ${{ steps.validate.outputs.operator_version }}
@@ -45,34 +44,36 @@ jobs:
 
           # Extract major.minor for branch name (e.g., "0.2.1" -> "0.2")
           major_minor=$(echo "${{ github.event.inputs.operator_version }}" | cut -d. -f1-2)
-          git ls-remote --heads origin | grep -q "refs/heads/release-$major_minor$" && { echo "Error: Branch release-$major_minor already exists"; exit 1; }
 
           # Set outputs for later steps
           echo "operator_version=${{ github.event.inputs.operator_version }}" >> $GITHUB_OUTPUT
           echo "llamastack_version=${{ github.event.inputs.llamastack_version }}" >> $GITHUB_OUTPUT
           echo "release_branch=release-$major_minor" >> $GITHUB_OUTPUT
 
-  update-files:
-    needs: validate-inputs
-    runs-on: ubuntu-24.04
-    env:
-      operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
-      llamastack_version: ${{ needs.validate-inputs.outputs.llamastack_version }}
-      release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+          echo "📦 Preparing release:"
+          echo "  Operator version: v${{ github.event.inputs.operator_version }}"
+          echo "  LlamaStack version: ${{ github.event.inputs.llamastack_version }}"
+          echo "  Release branch: release-$major_minor"
 
       - name: Configure git
         run: |
           git config user.name "${{ env.GIT_USER_NAME }}"
           git config user.email "${{ env.GIT_USER_EMAIL }}"
 
-      - name: Create temporary release branch
+      - name: Create or checkout release branch
         run: |
-          temp_branch="temp-release-v$operator_version-$(date +%Y%m%d-%H%M%S)"
-          echo "temp_branch=$temp_branch" >> $GITHUB_ENV
-          git checkout -b "$temp_branch"
+          release_branch="${{ steps.validate.outputs.release_branch }}"
+
+          # Check if release branch exists remotely
+          if git ls-remote --heads origin | grep -q "refs/heads/$release_branch"; then
+            echo "Checking out existing release branch: $release_branch"
+            git fetch origin "$release_branch"
+            git checkout "$release_branch"
+            git pull origin "$release_branch"
+          else
+            echo "Creating new release branch: $release_branch"
+            git checkout -b "$release_branch"
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -81,95 +82,109 @@ jobs:
 
       - name: Prepare release files
         run: |
-          # Use the new make release command
-          make release VERSION=$operator_version LLAMASTACK_VERSION=$llamastack_version
+          # Use the make release command to update all necessary files
+          make release VERSION=${{ steps.validate.outputs.operator_version }} LLAMASTACK_VERSION=${{ steps.validate.outputs.llamastack_version }}
+
+      - name: Run pre-commit checks
+        run: |
+          make pre-commit
+
+      - name: Run unit tests
+        run: |
+          make test
 
       - name: Build release image (validation gate)
         run: |
-          # Build the image to validate it works before creating PR
-          make docker-build IMG=quay.io/llamastack/llama-stack-k8s-operator:v$operator_version
-          echo "✅ Image built successfully: quay.io/llamastack/llama-stack-k8s-operator:v$operator_version"
+          # Build the image to validate it works before proceeding
+          make docker-build IMG=quay.io/llamastack/llama-stack-k8s-operator:v${{ steps.validate.outputs.operator_version }}
+          echo "✅ Image built successfully: quay.io/llamastack/llama-stack-k8s-operator:v${{ steps.validate.outputs.operator_version }}"
 
-      - name: Commit changes
+      - name: Commit and push changes
         run: |
           git add .
           if git diff --staged --quiet; then
             echo "No changes to commit - release files are already up to date"
-            # Create empty commit to document the release attempt
-            git commit --allow-empty -s -m "Release v$operator_version (no changes needed)" \
-                       -m "- Release files are already up to date" \
-                       -m "- This documents the release attempt for v$operator_version"
-            echo "changes_committed=false" >> $GITHUB_ENV
           else
-            git commit -s -m "Release v$operator_version" \
-                         -m "- Update operator version to v$operator_version" \
-                         -m "- Update LlamaStack distributions to $llamastack_version" \
+            git commit -s -m "Release v${{ steps.validate.outputs.operator_version }}" \
+                         -m "- Update operator version to v${{ steps.validate.outputs.operator_version }}" \
+                         -m "- Update LlamaStack distributions to ${{ steps.validate.outputs.llamastack_version }}" \
                          -m "- Generate release manifests"
-            echo "changes_committed=true" >> $GITHUB_ENV
-          fi
-          git push origin $temp_branch
-
-      - name: Create release PR
-        run: |
-          if [[ "$changes_committed" == "false" ]]; then
-            echo "Creating PR to document release attempt (no file changes needed)"
-            pr_title="Release v$operator_version (no changes needed)"
-            pr_body="## Automated Release Preparation
-
-          - Validated operator version v$operator_version
-          - Validated LlamaStack distributions $llamastack_version
-          - **No file changes were needed** - release files are already up to date
-
-          This PR documents the release attempt and can be merged to proceed with release."
-          else
-            echo "Creating PR with release file updates"
-            pr_title="Release v$operator_version"
-            pr_body="## Automated Release Preparation
-
-          - Updated operator version to v$operator_version
-          - Updated LlamaStack distributions to $llamastack_version
-          - Generated updated release manifests
-
-          This PR will be automatically merged once all checks pass."
+            git push origin "${{ steps.validate.outputs.release_branch }}"
+            echo "✅ Committed release changes to ${{ steps.validate.outputs.release_branch }}"
           fi
 
-          gh pr create \
-            --base "$release_branch" \
-            --head "$temp_branch" \
-            --title "$pr_title" \
-            --body "$pr_body"
-          echo "✅ Created release PR"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  cleanup-failed-release:
-    needs: [validate-inputs, update-files]
+  finalize-release:
+    needs: generate-and-finalize-release
     runs-on: ubuntu-24.04
-    if: failure()
     env:
-      release_branch: ${{ needs.validate-inputs.outputs.release_branch }}
-      operator_version: ${{ needs.validate-inputs.outputs.operator_version }}
+      operator_version: ${{ needs.generate-and-finalize-release.outputs.operator_version }}
+      llamastack_version: ${{ needs.generate-and-finalize-release.outputs.llamastack_version }}
+      release_branch: ${{ needs.generate-and-finalize-release.outputs.release_branch }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.release_branch }}
+          fetch-depth: 0
 
       - name: Configure git
         run: |
           git config user.name "${{ env.GIT_USER_NAME }}"
           git config user.email "${{ env.GIT_USER_EMAIL }}"
 
-      - name: Cleanup failed release attempt
+      - name: Create release tag
         run: |
-          echo "Cleaning up failed release attempt..."
+          # Create and push the release tag
+          git tag -a "v${{ env.operator_version }}" -m "Release v${{ env.operator_version }}"
+          git push origin "v${{ env.operator_version }}"
+          echo "✅ Created tag v${{ env.operator_version }}"
 
-          # Find and delete temporary branches for this release version
-          temp_branches=$(git ls-remote --heads origin | grep "refs/heads/temp-release-v$operator_version" | cut -f2 | sed 's|refs/heads/||' || true)
+      - name: Create GitHub Release
+        run: |
+          RELEASE_NOTES="## What's Changed
 
-          for temp_branch in $temp_branches; do
-            echo "🧹 Deleting temp branch: $temp_branch"
-            git push origin --delete "$temp_branch" || echo "Failed to delete $temp_branch"
-          done
+          - Updated operator version to v${{ env.operator_version }}
+          - Updated LlamaStack distributions to ${{ env.llamastack_version }}
+          - Generated updated release manifests
 
-          echo "✅ Cleanup completed"
+          ## Installation
+
+          Install the operator using kubectl:
+
+          \`\`\`bash
+          kubectl apply -f https://raw.githubusercontent.com/llamastack/llama-stack-k8s-operator/v${{ env.operator_version }}/release/operator.yaml
+          \`\`\`
+
+          ## Container Images
+
+          - Operator: \`quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}\`
+          - LlamaStack distributions: \`docker.io/llamastack/distribution-*:${{ env.llamastack_version }}\`"
+
+          gh release create "v${{ env.operator_version }}" \
+            --title "Release v${{ env.operator_version }}" \
+            --notes "$RELEASE_NOTES"
+
+          echo "🎉 Created GitHub release v${{ env.operator_version }}"
         env:
           GH_TOKEN: ${{ github.token }}
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Push release image
+        run: |
+          # Push the release image after successfully creating the release
+          make docker-push IMG=quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}
+          echo "✅ Pushed: quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}"
+
+      - name: Release complete
+        run: |
+          echo "🚀 Release v${{ env.operator_version }} completed successfully!"
+          echo "📦 Container image: quay.io/llamastack/llama-stack-k8s-operator:v${{ env.operator_version }}"
+          echo "📝 Release notes: https://github.com/${{ github.repository }}/releases/tag/v${{ env.operator_version }}"
+          echo "🔧 Install with: kubectl apply -f https://raw.githubusercontent.com/llamastack/llama-stack-k8s-operator/v${{ env.operator_version }}/release/operator.yaml"
+          echo "🌿 Release branch: ${{ env.release_branch }}"
