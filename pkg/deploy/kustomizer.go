@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
+	"github.com/llamastack/llama-stack-k8s-operator/pkg/compare"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/deploy/plugins"
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -161,6 +162,10 @@ func patchResource(ctx context.Context, cli client.Client, desired, existing *un
 			"name", existing.GetName(),
 			"namespace", existing.GetNamespace())
 		return nil
+	} else if existing.GetKind() == "Service" {
+		if err := compare.CheckAndLogServiceChanges(ctx, cli, desired); err != nil {
+			return fmt.Errorf("failed to validate resource mutations while patching: %w", err)
+		}
 	}
 
 	data, err := json.Marshal(desired)
