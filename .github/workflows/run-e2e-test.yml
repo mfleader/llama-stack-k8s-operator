@@ -65,13 +65,18 @@ jobs:
 
       - name: Build operator image
         run: |
-          PR_NUMBER=${{ inputs.pr_number || github.event.pull_request.number }}
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            IMAGE_TAG="pr${{ inputs.pr_number }}"
+          elif [ -n "${{ github.event.pull_request.number }}" ]; then
+            IMAGE_TAG="pr${{ github.event.pull_request.number }}"
+          else
+            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+            COMMIT_HASH=$(git rev-parse --short HEAD)
+            IMAGE_TAG="${TIMESTAMP}-${COMMIT_HASH}"
+          fi
 
-          # Build the image with a simpler tag format
-          docker build -t kind-registry:5000/llama-stack-k8s-operator:pr${PR_NUMBER} -f Dockerfile .
-
-          # Tag the image for local registry
-          docker tag kind-registry:5000/llama-stack-k8s-operator:pr${PR_NUMBER} kind-registry:5000/llama-stack-k8s-operator:latest
+          docker build -t kind-registry:5000/llama-stack-k8s-operator:${IMAGE_TAG} -f Dockerfile .
+          docker tag kind-registry:5000/llama-stack-k8s-operator:${IMAGE_TAG} kind-registry:5000/llama-stack-k8s-operator:latest
 
       - name: Push operator image to local registry
         run: |
