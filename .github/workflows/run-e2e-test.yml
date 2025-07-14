@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [ main ]
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'PR number for image tagging'
+        required: true
+        type: string
 
 jobs:
   e2e-tests:
@@ -59,11 +65,13 @@ jobs:
 
       - name: Build operator image
         run: |
+          PR_NUMBER=${{ inputs.pr_number || github.event.pull_request.number }}
+
           # Build the image with a simpler tag format
-          docker build -t kind-registry:5000/llama-stack-k8s-operator:pr${{ github.event.pull_request.number }} -f Dockerfile .
+          docker build -t kind-registry:5000/llama-stack-k8s-operator:pr${PR_NUMBER} -f Dockerfile .
 
           # Tag the image for local registry
-          docker tag kind-registry:5000/llama-stack-k8s-operator:pr${{ github.event.pull_request.number }} kind-registry:5000/llama-stack-k8s-operator:latest
+          docker tag kind-registry:5000/llama-stack-k8s-operator:pr${PR_NUMBER} kind-registry:5000/llama-stack-k8s-operator:latest
 
       - name: Push operator image to local registry
         run: |
