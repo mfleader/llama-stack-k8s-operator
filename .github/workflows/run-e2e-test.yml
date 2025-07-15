@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: '1.21'
+          go-version: '1.23'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
@@ -36,8 +36,9 @@ jobs:
               kind: InitConfiguration
               nodeRegistration:
                 kubeletExtraArgs:
-                  system-reserved: memory=500Mi
-                  eviction-hard: memory.available<200Mi
+                  system-reserved: memory=1Gi,cpu=500m
+                  eviction-hard: memory.available<500Mi
+                  max-pods: "50"
             extraPortMappings:
             - containerPort: 80
               hostPort: 80

@@ -113,6 +113,7 @@ func EnsureResourceReady(
 	t.Helper()
 	ctx, cancel := context.WithTimeout(testenv.Ctx, timeout)
 	defer cancel()
+	t.Logf("Waiting for %s %s/%s to be ready (timeout: %v)", gvk.Kind, namespace, name, timeout)
 	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
