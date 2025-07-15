@@ -3,8 +3,10 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -182,4 +184,50 @@ func GetSampleCR(t *testing.T) *v1alpha1.LlamaStackDistribution {
 	require.NoError(t, err)
 
 	return distribution
+}
+
+// Add disk space monitoring functions.
+func LogDiskUsage(description string) {
+	fmt.Printf("\n=== Disk Usage: %s ===\n", description)
+	cmd := exec.Command("df", "-h")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error getting disk usage: %v\n", err)
+		return
+	}
+	fmt.Println(string(output))
+}
+
+func LogMemoryUsage(description string) {
+	fmt.Printf("\n=== Memory Usage: %s ===\n", description)
+	cmd := exec.Command("free", "-h")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error getting memory usage: %v\n", err)
+		return
+	}
+	fmt.Println(string(output))
+}
+
+func LogProcessInfo(description string) {
+	fmt.Printf("\n=== Process Info: %s ===\n", description)
+	// Show top 10 processes by memory
+	cmd := exec.Command("bash", "-c", "ps aux --sort=-%mem | head -11")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error getting process info: %v\n", err)
+		return
+	}
+	fmt.Println(string(output))
+}
+
+func LogKindClusterSize() {
+	fmt.Printf("\n=== Kind Cluster Size ===\n")
+	cmd := exec.Command("docker", "ps", "-a", "--format", "table {{.Names}}\t{{.Size}}")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Error getting docker container sizes: %v\n", err)
+		return
+	}
+	fmt.Println(string(output))
 }
