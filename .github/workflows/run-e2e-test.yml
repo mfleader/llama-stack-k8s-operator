@@ -84,6 +84,18 @@ jobs:
             exit 1
           fi
 
+      - name: Pre-pull distribution images
+        run: |
+          echo "Pre-pulling distribution images to avoid timeouts during tests..."
+          # Extract image names from distributions.json and pull them
+          cat distributions.json | jq -r '.[]' | while read image; do
+            echo "Pulling $image..."
+            docker pull "$image"
+            # Load the image into kind cluster
+            kind load docker-image "$image"
+          done
+          echo "All distribution images pre-pulled and loaded into kind cluster"
+
       - name: Run e2e tests
         run: |
           make test-e2e
