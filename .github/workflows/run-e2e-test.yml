@@ -42,7 +42,7 @@ jobs:
 
       - name: Build operator image
         run: |
-          make image-build IMG=controller:e2e
+          make image-build IMG=controller:e2e CONTAINER_TOOL=docker
 
       - name: Disk space after operator build
         run: |
@@ -117,12 +117,10 @@ jobs:
       - name: Collect diagnostic data
         if: always()
         run: |
-          # Check available contexts and set kubectl context for Kind cluster
-          echo "Available kubectl contexts:"
-          kubectl config get-contexts
-          kubectl config use-context kind-e2e-tests || echo "Context kind-e2e-tests not found, trying alternatives..."
+          # Set kubectl context for Kind cluster
+          kubectl config use-context kind-e2e-tests
           # Collect logs and resource usage
-          kubectl get all -A || echo "Failed to get resources"
-          kubectl describe nodes || echo "Failed to describe nodes"
-          kubectl top nodes || echo "Failed to get node metrics"
-          kubectl top pods -A || echo "Failed to get pod metrics"
+          kubectl get all -A
+          kubectl describe nodes
+          kubectl top nodes || true
+          kubectl top pods -A || true
