@@ -81,7 +81,7 @@ jobs:
 
       - name: Wait for operator
         run: |
-          kubectl wait --for=condition=available --timeout=300s deployment/llama-stack-operator-controller-manager -n llama-stack-operator-system
+          kubectl wait --for=condition=available --timeout=300s deployment/llama-stack-k8s-operator-controller-manager -n llama-stack-k8s-operator-system
 
       - name: Monitor disk during e2e tests
         run: |
