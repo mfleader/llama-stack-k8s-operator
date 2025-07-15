@@ -6,8 +6,8 @@ on:
     branches: [ main ]
   workflow_call:
     inputs:
-      pr_number:
-        description: 'PR number for image tagging'
+      image_tag:
+        description: 'Image tag to use for the operator image'
         required: true
         type: string
 
@@ -65,14 +65,10 @@ jobs:
 
       - name: Build operator image
         run: |
-          if [ -n "${{ inputs.pr_number }}" ]; then
-            IMAGE_TAG="pr${{ inputs.pr_number }}"
-          elif [ -n "${{ github.event.pull_request.number }}" ]; then
-            IMAGE_TAG="pr${{ github.event.pull_request.number }}"
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
           else
-            TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-            COMMIT_HASH=$(git rev-parse --short HEAD)
-            IMAGE_TAG="${TIMESTAMP}-${COMMIT_HASH}"
+            IMAGE_TAG="pr${{ github.event.pull_request.number }}"
           fi
 
           docker build -t kind-registry:5000/llama-stack-k8s-operator:${IMAGE_TAG} -f Dockerfile .

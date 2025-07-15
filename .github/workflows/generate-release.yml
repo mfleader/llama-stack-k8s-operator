@@ -178,8 +178,29 @@ jobs:
             echo "✅ Committed release changes to ${{ steps.validate.outputs.release_branch }}"
           fi
 
-  finalize-release:
+  generate-e2e-tag:
     needs: generate-release
+    runs-on: ubuntu-24.04
+    outputs:
+      image_tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.generate-release.outputs.release_branch }}
+
+      - name: Generate image tag
+        id: tag
+        run: echo "value=${{ needs.generate-release.outputs.release_branch }}_$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+  run-e2e-tests:
+    needs: [generate-release, generate-e2e-tag]
+    uses: ./.github/workflows/run-e2e-test.yml
+    with:
+      image_tag: ${{ needs.generate-e2e-tag.outputs.image_tag }}
+
+  finalize-release:
+    needs: [generate-release, run-e2e-tests]
     runs-on: ubuntu-24.04
     env:
       operator_version: ${{ needs.generate-release.outputs.operator_version }}
