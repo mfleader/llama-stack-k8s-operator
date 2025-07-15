@@ -478,3 +478,55 @@ func TestApplyResources_PVCImmutability(t *testing.T) {
 	storageRequest := unchangedPVC.Spec.Resources.Requests[corev1.ResourceStorage]
 	require.Equal(t, expStorageSize, storageRequest.String(), "PVC storage spec should remain unchanged")
 }
+
+// TestFilterExcludeKinds tests the filtering functionality.
+func TestFilterExcludeKinds(t *testing.T) {
+	t.Run("excludes specified kinds", func(t *testing.T) {
+		pvc := newTestResource(t, "v1", "PersistentVolumeClaim", "test-pvc", "test-ns", nil)
+		svc := newTestResource(t, "v1", "Service", "test-svc", "test-ns", nil)
+
+		resMap := resmap.New()
+		require.NoError(t, resMap.Append(pvc))
+		require.NoError(t, resMap.Append(svc))
+
+		filtered, err := FilterExcludeKinds(&resMap, []string{"PersistentVolumeClaim"})
+		require.NoError(t, err)
+		require.Equal(t, 1, (*filtered).Size())
+		require.Equal(t, "Service", (*filtered).Resources()[0].GetKind())
+	})
+
+	t.Run("includes all when no exclusions", func(t *testing.T) {
+		svc := newTestResource(t, "v1", "Service", "test-svc", "test-ns", nil)
+		resMap := resmap.New()
+		require.NoError(t, resMap.Append(svc))
+
+		filtered, err := FilterExcludeKinds(&resMap, []string{})
+		require.NoError(t, err)
+		require.Equal(t, 1, (*filtered).Size())
+		require.Equal(t, "Service", (*filtered).Resources()[0].GetKind())
+	})
+
+	t.Run("handles empty inputs", func(t *testing.T) {
+		emptyResMap := resmap.New()
+
+		filtered, err := FilterExcludeKinds(&emptyResMap, []string{"PersistentVolumeClaim"})
+		require.NoError(t, err)
+		require.Equal(t, 0, (*filtered).Size())
+	})
+
+	t.Run("excludes multiple kinds", func(t *testing.T) {
+		pvc := newTestResource(t, "v1", "PersistentVolumeClaim", "test-pvc", "test-ns", nil)
+		svc := newTestResource(t, "v1", "Service", "test-svc", "test-ns", nil)
+		deployment := newTestResource(t, "apps/v1", "Deployment", "test-deployment", "test-ns", nil)
+
+		resMap := resmap.New()
+		require.NoError(t, resMap.Append(pvc))
+		require.NoError(t, resMap.Append(svc))
+		require.NoError(t, resMap.Append(deployment))
+
+		filtered, err := FilterExcludeKinds(&resMap, []string{"PersistentVolumeClaim", "Service"})
+		require.NoError(t, err)
+		require.Equal(t, 1, (*filtered).Size())
+		require.Equal(t, "Deployment", (*filtered).Resources()[0].GetKind())
+	})
+}
