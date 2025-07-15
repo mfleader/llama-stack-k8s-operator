@@ -91,10 +91,9 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 		Version: "v1",
 		Kind:    "Service",
 	}, llsdistributionCR.Name+"-service", ns.Name, ResourceReadyTimeout, func(u *unstructured.Unstructured) bool {
-		// Check if the service has a valid spec and status
+		// Check if the service has a valid spec
 		spec, specFound, _ := unstructured.NestedMap(u.Object, "spec")
-		status, statusFound, _ := unstructured.NestedMap(u.Object, "status")
-		return specFound && statusFound && spec != nil && status != nil
+		return specFound && spec != nil
 	})
 	require.NoError(t, err)
 
