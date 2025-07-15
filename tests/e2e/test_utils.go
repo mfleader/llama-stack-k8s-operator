@@ -29,7 +29,7 @@ import (
 const (
 	ollamaNS             = "ollama-dist"
 	pollInterval         = 10 * time.Second
-	ResourceReadyTimeout = 5 * time.Minute
+	ResourceReadyTimeout = 10 * time.Minute
 	generalRetryInterval = 5 * time.Second
 )
 

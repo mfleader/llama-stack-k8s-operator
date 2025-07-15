@@ -85,12 +85,16 @@ jobs:
             exit 1
           fi
 
-      - name: Pre-pull distribution images
-        run: |
-          echo "Pre-pulling ollama distribution image to avoid timeouts during tests..."
-          docker pull docker.io/llamastack/distribution-ollama:latest
-          kind load docker-image docker.io/llamastack/distribution-ollama:latest --name kind
-          echo "Ollama distribution image pre-pulled and loaded into kind cluster"
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
       - name: Run e2e tests
         run: |
