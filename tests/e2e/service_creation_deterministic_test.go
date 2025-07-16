@@ -2,7 +2,6 @@
 package e2e
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,17 +11,19 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // TestServiceCreationDeterministic focuses specifically on Service creation
 // via the operator to understand why Services aren't being created in e2e.
+// Modified to reproduce the exact failure scenario from the original creation test.
 func TestServiceCreationDeterministic(t *testing.T) {
-	t.Log("=== Deterministic Service Creation E2E Test ===")
+	t.Log("=== Deterministic Service Creation E2E Test (Reproducing Original Failure) ===")
 
-	// Create isolated test namespace
-	testNS := "service-creation-test-" + randomString(5)
+	// Use SAME namespace as original test
+	testNS := "llama-stack-test"
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testNS,
@@ -30,22 +31,24 @@ func TestServiceCreationDeterministic(t *testing.T) {
 	}
 
 	err := TestEnv.Client.Create(TestEnv.Ctx, ns)
-	require.NoError(t, err)
+	if err != nil && !k8serrors.IsNotFound(err) {
+		require.NoError(t, err)
+	}
 
 	defer func() {
 		_ = TestEnv.Client.Delete(TestEnv.Ctx, ns)
 	}()
 
-	t.Logf("Created test namespace: %s", testNS)
+	t.Logf("Using same namespace as original test: %s", testNS)
 
 	// Step 1: Verify operator is running
 	verifyOperatorRunning(t)
 
-	// Step 2: Create minimal LlamaStackDistribution
-	llsd := createMinimalLlamaStackDistribution(t, testNS)
+	// Step 2: Create SAME CR as original test
+	llsd := createSameCRAsOriginal(t, testNS)
 
-	// Step 3: Monitor reconciliation and Service creation
-	monitorServiceCreation(t, testNS, llsd.Name)
+	// Step 3: Monitor with SAME logic as original test
+	monitorServiceCreationWithOriginalLogic(t, testNS, llsd.Name)
 }
 
 // verifyOperatorRunning checks that the operator controller-manager is running and ready.
@@ -107,48 +110,25 @@ func isPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// createMinimalLlamaStackDistribution creates a minimal CR for testing.
-func createMinimalLlamaStackDistribution(t *testing.T, namespace string) *v1alpha1.LlamaStackDistribution {
+// createSameCRAsOriginal creates the exact same CR as the original creation test.
+func createSameCRAsOriginal(t *testing.T, namespace string) *v1alpha1.LlamaStackDistribution {
 	t.Helper()
-	t.Log("=== Creating LlamaStackDistribution ===")
+	t.Log("=== Creating SAME LlamaStackDistribution as Original Test ===")
 
-	llsd := &v1alpha1.LlamaStackDistribution{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-distribution",
-			Namespace: namespace,
-		},
-		Spec: v1alpha1.LlamaStackDistributionSpec{
-			Replicas: 1,
-			Server: v1alpha1.ServerSpec{
-				Distribution: v1alpha1.DistributionType{
-					Name: "ollama",
-				},
-				ContainerSpec: v1alpha1.ContainerSpec{
-					Name: v1alpha1.DefaultContainerName,
-					Port: v1alpha1.DefaultServerPort,
-					// Add environment variables to ensure HasPorts() returns true
-					Env: []corev1.EnvVar{
-						{
-							Name:  "INFERENCE_MODEL",
-							Value: "llama3.2:1b",
-						},
-						{
-							Name:  "OLLAMA_URL",
-							Value: "http://ollama-server-service.ollama-dist.svc.cluster.local:11434",
-						},
-					},
-				},
-			},
-		},
-	}
+	// Use GetSampleCR() exactly like the original test
+	llsd := GetSampleCR(t)
+	llsd.Namespace = namespace
 
 	t.Logf("Creating LlamaStackDistribution: %s/%s", namespace, llsd.Name)
+	t.Logf("CR name: %s (same as original)", llsd.Name)
 	t.Logf("HasPorts() would return: %v", hasPortsWouldReturn(llsd))
 
 	err := TestEnv.Client.Create(TestEnv.Ctx, llsd)
-	require.NoError(t, err)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		require.NoError(t, err)
+	}
 
-	t.Log("✅ LlamaStackDistribution created successfully")
+	t.Log("✅ LlamaStackDistribution created successfully (same as original)")
 	return llsd
 }
 
@@ -158,183 +138,99 @@ func hasPortsWouldReturn(llsd *v1alpha1.LlamaStackDistribution) bool {
 	return containerSpec.Port != 0 || len(containerSpec.Env) > 0
 }
 
-// monitorServiceCreation watches for Service creation and provides detailed debugging.
-func monitorServiceCreation(t *testing.T, namespace, distributionName string) {
+// monitorServiceCreationWithOriginalLogic uses the EXACT same Service readiness logic as the original test.
+func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributionName string) {
 	t.Helper()
-	t.Log("=== Monitoring Service Creation ===")
+	t.Log("=== Using EXACT Original Service Readiness Logic ===")
 
 	serviceName := distributionName + "-service"
-	serviceKey := client.ObjectKey{Namespace: namespace, Name: serviceName}
-
-	// Track timing
-	startTime := time.Now()
-	checkInterval := 5 * time.Second
-	maxWaitTime := 2 * time.Minute // Shorter timeout for focused test
+	serviceGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"}
 
 	t.Logf("Monitoring for Service: %s/%s", namespace, serviceName)
-	t.Logf("Check interval: %v, Max wait: %v", checkInterval, maxWaitTime)
+	t.Logf("Using original timeout: %v", ResourceReadyTimeout)
+	t.Logf("Using original polling interval: %v", pollInterval)
 
-	// Monitor both the LlamaStackDistribution and Service creation
-	ctx, cancel := context.WithTimeout(TestEnv.Ctx, maxWaitTime)
-	defer cancel()
+	// EXACT pre-check logic from original test
+	t.Logf("=== Pre-Service Check Debug (Original Logic) ===")
+	serviceObj := &unstructured.Unstructured{}
+	serviceObj.SetGroupVersionKind(serviceGVK)
+	serviceKey := client.ObjectKey{Namespace: namespace, Name: serviceName}
 
-	attempt := 0
-	err := wait.PollUntilContextTimeout(ctx, checkInterval, maxWaitTime, true, func(ctx context.Context) (bool, error) {
-		attempt++
-		elapsed := time.Since(startTime)
+	getErr := TestEnv.Client.Get(TestEnv.Ctx, serviceKey, serviceObj)
+	if getErr != nil {
+		t.Logf("Service %s/%s does not exist yet or error getting it: %v", namespace, serviceName, getErr)
+	} else {
+		t.Logf("Service %s/%s exists! Current object: %+v", namespace, serviceName, serviceObj.Object)
 
-		t.Logf("\n--- Check %d (after %v) ---", attempt, elapsed.Truncate(time.Second))
+		// Check current status immediately
+		preSpec, preSpecFound, _ := unstructured.NestedMap(serviceObj.Object, "spec")
+		preStatus, preStatusFound, _ := unstructured.NestedMap(serviceObj.Object, "status")
+		t.Logf("PRE-CHECK: Spec found: %v (nil: %v), Status found: %v, Status content: %+v", preSpecFound, preSpec == nil, preStatusFound, preStatus)
+	}
+	t.Logf("=== End Pre-Service Check ===")
 
-		// 1. Check LlamaStackDistribution status
-		checkLlamaStackDistributionStatus(t, namespace, distributionName)
+	// Use EXACT EnsureResourceReady call from original test
+	t.Logf("Starting Service readiness check with %v timeout", ResourceReadyTimeout)
+	err := EnsureResourceReady(t, TestEnv, serviceGVK, serviceName, namespace, ResourceReadyTimeout, func(u *unstructured.Unstructured) bool {
+		// EXACT debugging logic from original test
+		t.Logf("=== Service Readiness Check Debug (Attempt) ===")
 
-		// 2. Check if Service exists
-		service := &corev1.Service{}
-		err := TestEnv.Client.Get(ctx, serviceKey, service)
-		if err == nil {
-			t.Logf("✅ SERVICE FOUND after %v!", elapsed.Truncate(time.Millisecond))
-			logServiceDetails(t, service)
-			return true, nil
+		// Check spec field
+		spec, specFound, _ := unstructured.NestedMap(u.Object, "spec")
+		t.Logf("Spec found: %v, Spec nil: %v", specFound, spec == nil)
+
+		// Check status field existence and content
+		status, statusFound, _ := unstructured.NestedMap(u.Object, "status")
+		t.Logf("Status found: %v, Status nil: %v, Status content: %+v", statusFound, status == nil, status)
+
+		// Log service type for verification
+		serviceType, typeFound, _ := unstructured.NestedString(u.Object, "spec", "type")
+		t.Logf("Service type found: %v, Service type: %s", typeFound, serviceType)
+
+		// Log object keys to see what fields actually exist
+		var objectKeys []string
+		for key := range u.Object {
+			objectKeys = append(objectKeys, key)
 		}
+		t.Logf("Service object keys: %v", objectKeys)
 
-		if !k8serrors.IsNotFound(err) {
-			t.Logf("❌ Unexpected error getting Service: %v", err)
-			return false, err
-		}
+		// EXACT BUGGY LOGIC from original test - this should cause the failure!
+		originalResult := specFound && statusFound && spec != nil && status != nil
+		t.Logf("Original buggy logic result: %v", originalResult)
 
-		t.Logf("❌ Service %s not found (attempt %d)", serviceName, attempt)
+		// PROPOSED FIX LOGIC - checking only spec (for comparison)
+		fixedResult := specFound && spec != nil
+		t.Logf("Fixed logic result: %v", fixedResult)
 
-		// 3. Check events in the namespace
-		if attempt%2 == 0 { // Every other attempt to reduce noise
-			checkNamespaceEvents(t, namespace)
-		}
+		t.Logf("=== End Service Readiness Check Debug ===")
 
-		// 4. Check operator logs periodically
-		if attempt%3 == 0 { // Every third attempt
-			checkOperatorLogs(t)
-		}
-
-		return false, nil
+		// Use the original buggy logic to reproduce the failure!
+		return originalResult
 	})
 
+	// This should fail with timeout, just like the original test
 	if err != nil {
-		t.Logf("❌ Service creation monitoring failed: %v", err)
+		t.Logf("❌ REPRODUCED ORIGINAL FAILURE: %v", err)
+		t.Log("=== This confirms the issue is in the Service readiness check logic ===")
 
-		// Final diagnostic information
-		t.Log("\n=== FINAL DIAGNOSTICS ===")
-		checkLlamaStackDistributionStatus(t, namespace, distributionName)
-		checkNamespaceEvents(t, namespace)
-		checkOperatorLogs(t)
-		listAllServicesInNamespace(t, namespace)
+		// Show what the fix would be
+		t.Log("=== Testing Fix: Using spec-only logic ===")
+		fixErr := EnsureResourceReady(t, TestEnv, serviceGVK, serviceName, namespace, 30*time.Second, func(u *unstructured.Unstructured) bool {
+			spec, specFound, _ := unstructured.NestedMap(u.Object, "spec")
+			fixedResult := specFound && spec != nil
+			t.Logf("Fixed logic result: %v", fixedResult)
+			return fixedResult
+		})
 
-		require.NoError(t, err, "Service should be created within timeout")
-	}
-}
-
-// checkLlamaStackDistributionStatus checks the status of the LlamaStackDistribution.
-func checkLlamaStackDistributionStatus(t *testing.T, namespace, name string) {
-	t.Helper()
-
-	llsd := &v1alpha1.LlamaStackDistribution{}
-	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{Namespace: namespace, Name: name}, llsd)
-	if err != nil {
-		t.Logf("⚠️  Error getting LlamaStackDistribution: %v", err)
-		return
-	}
-
-	t.Logf("LlamaStackDistribution status:")
-	t.Logf("  Phase: %s", llsd.Status.Phase)
-	t.Logf("  Generation: %d", llsd.Generation)
-	t.Logf("  ResourceVersion: %s", llsd.ResourceVersion)
-	t.Logf("  Conditions: %+v", llsd.Status.Conditions)
-}
-
-// checkNamespaceEvents looks for relevant events in the test namespace.
-func checkNamespaceEvents(t *testing.T, namespace string) {
-	t.Helper()
-
-	eventList := &corev1.EventList{}
-	err := TestEnv.Client.List(TestEnv.Ctx, eventList, client.InNamespace(namespace))
-	if err != nil {
-		t.Logf("⚠️  Error getting events: %v", err)
-		return
-	}
-
-	if len(eventList.Items) == 0 {
-		t.Log("📝 No events found in namespace")
-		return
-	}
-
-	t.Logf("📝 Found %d events in namespace %s:", len(eventList.Items), namespace)
-	for _, event := range eventList.Items {
-		t.Logf("  %s: %s (%s) - %s",
-			event.LastTimestamp.Format("15:04:05"),
-			event.Reason,
-			event.Type,
-			event.Message)
-	}
-}
-
-// checkOperatorLogs attempts to get recent operator logs.
-func checkOperatorLogs(t *testing.T) {
-	t.Helper()
-
-	// Note: In e2e tests, we typically can't easily get logs via the client API
-	// This would require kubectl or additional tooling
-	t.Log("🔍 Operator logs check would require kubectl integration")
-
-	// Instead, we can check if the operator pod is still healthy
-	operatorNS := "llama-stack-k8s-operator-system"
-	podList := &corev1.PodList{}
-	err := TestEnv.Client.List(TestEnv.Ctx, podList, client.InNamespace(operatorNS))
-	if err != nil {
-		t.Logf("⚠️  Error getting operator pods: %v", err)
-		return
-	}
-
-	for _, pod := range podList.Items {
-		if pod.Labels["control-plane"] == "controller-manager" {
-			t.Logf("Operator pod status: Phase=%s, Ready=%v", pod.Status.Phase, isPodReady(&pod))
-			if len(pod.Status.ContainerStatuses) > 0 {
-				container := pod.Status.ContainerStatuses[0]
-				t.Logf("  Container: Ready=%v, RestartCount=%d", container.Ready, container.RestartCount)
-			}
+		if fixErr == nil {
+			t.Log("✅ FIXED LOGIC WORKS: Service is ready when checking spec only!")
+		} else {
+			t.Logf("❌ Even fixed logic failed: %v", fixErr)
 		}
-	}
-}
 
-// logServiceDetails logs detailed information about a found Service.
-func logServiceDetails(t *testing.T, service *corev1.Service) {
-	t.Helper()
-
-	t.Log("Service details:")
-	t.Logf("  Name: %s", service.Name)
-	t.Logf("  Namespace: %s", service.Namespace)
-	t.Logf("  Type: %s", service.Spec.Type)
-	t.Logf("  Ports: %+v", service.Spec.Ports)
-	t.Logf("  Selector: %+v", service.Spec.Selector)
-	t.Logf("  Labels: %+v", service.Labels)
-	t.Logf("  CreationTimestamp: %s", service.CreationTimestamp.Format("15:04:05"))
-}
-
-// listAllServicesInNamespace lists all services in the namespace for debugging.
-func listAllServicesInNamespace(t *testing.T, namespace string) {
-	t.Helper()
-
-	serviceList := &corev1.ServiceList{}
-	err := TestEnv.Client.List(TestEnv.Ctx, serviceList, client.InNamespace(namespace))
-	if err != nil {
-		t.Logf("⚠️  Error listing services: %v", err)
-		return
-	}
-
-	if len(serviceList.Items) == 0 {
-		t.Logf("📋 No services found in namespace %s", namespace)
-		return
-	}
-
-	t.Logf("📋 All services in namespace %s:", namespace)
-	for _, svc := range serviceList.Items {
-		t.Logf("  - %s (type: %s, ports: %d)", svc.Name, svc.Spec.Type, len(svc.Spec.Ports))
+		// Fail the test to show the reproduction
+		require.NoError(t, err, "Reproduced original failure: Service readiness check timed out")
+	} else {
+		t.Log("🤔 Original logic passed - unable to reproduce failure")
 	}
 }
