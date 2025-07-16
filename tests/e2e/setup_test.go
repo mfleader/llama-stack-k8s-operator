@@ -11,6 +11,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Register schemes first
+	registerSchemes()
+
 	// Set up test environment
 	var err error
 	TestEnv, err = SetupTestEnv()

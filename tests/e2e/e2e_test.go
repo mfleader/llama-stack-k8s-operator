@@ -6,7 +6,6 @@ import (
 )
 
 func TestE2E(t *testing.T) {
-	registerSchemes()
 	// Run validation tests
 	t.Run("validation", TestValidationSuite)
 
