@@ -459,3 +459,141 @@ server:
 	// Note: In test environment, field indexer might not be set up properly,
 	// so we skip the isConfigMapReferenced checks which rely on field indexing
 }
+
+// TestServiceCreationIntegration specifically tests the Service creation logic
+// in the kustomize-based reconciliation flow. This test focuses on verifying
+// that Services are created correctly and handles the transition from direct
+// Service creation to kustomize-based creation.
+func TestServiceCreationIntegration(t *testing.T) {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	testEnv := &envtest.Environment{
+		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
+		ErrorIfCRDPathMissing: true,
+		BinaryAssetsDirectory: os.Getenv("KUBEBUILDER_ASSETS"),
+	}
+
+	cfg, err := testEnv.Start()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, testEnv.Stop()) }()
+
+	// Setup scheme
+	k8sScheme := runtime.NewScheme()
+	require.NoError(t, kubernetesscheme.AddToScheme(k8sScheme))
+	require.NoError(t, llamav1alpha1.AddToScheme(k8sScheme))
+	require.NoError(t, corev1.AddToScheme(k8sScheme))
+	require.NoError(t, appsv1.AddToScheme(k8sScheme))
+
+	ctrlRuntimeClient, err := client.New(cfg, client.Options{Scheme: k8sScheme})
+	require.NoError(t, err)
+	require.NotNil(t, ctrlRuntimeClient)
+
+	// Setup reconciler
+	reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme)
+
+	ctx := context.Background()
+
+	// Create a test namespace for isolation
+	testenvNamespaceCounter++
+	namespace := fmt.Sprintf("service-test-%d", testenvNamespaceCounter)
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+		},
+	}
+	require.NoError(t, ctrlRuntimeClient.Create(ctx, ns))
+
+	// Cleanup namespace after test
+	defer func() {
+		_ = ctrlRuntimeClient.Delete(ctx, ns)
+	}()
+
+	// Create a test instance with environment variables (to ensure HasPorts() returns true)
+	instance := baseInstance()
+	instance.Name = "service-test"
+	instance.Namespace = namespace
+	// Add environment variables to make HasPorts() return true
+	instance.Spec.Server.ContainerSpec.Env = []corev1.EnvVar{
+		{
+			Name:  "INFERENCE_MODEL",
+			Value: "llama3.2:1b",
+		},
+		{
+			Name:  "OLLAMA_URL",
+			Value: "http://test-service:11434",
+		},
+	}
+
+	// Create the LlamaStackDistribution instance
+	require.NoError(t, ctrlRuntimeClient.Create(ctx, instance))
+
+	// Trigger reconciliation
+	req := ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name:      instance.Name,
+			Namespace: instance.Namespace,
+		},
+	}
+
+	// Run reconciliation once
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	// Wait for reconciliation by checking if Service is created
+	serviceKey := types.NamespacedName{
+		Name:      instance.Name + "-service",
+		Namespace: namespace,
+	}
+
+	service := &corev1.Service{}
+
+	// Test with extended timeout since this involves kustomize processing
+	timeout := 30 * time.Second
+	interval := 1 * time.Second
+
+	t.Logf("Waiting for Service %s to be created (timeout: %v)", serviceKey.Name, timeout)
+
+	// Poll for Service creation with detailed logging
+	start := time.Now()
+	for time.Since(start) < timeout {
+		err := ctrlRuntimeClient.Get(ctx, serviceKey, service)
+		if err == nil {
+			t.Logf("SUCCESS: Service %s created after %v", serviceKey.Name, time.Since(start))
+
+			// Verify Service properties
+			assert.Equal(t, instance.Name+"-service", service.Name)
+			assert.Equal(t, namespace, service.Namespace)
+			assert.Equal(t, corev1.ServiceTypeClusterIP, service.Spec.Type)
+
+			// Check that ports are properly set
+			require.NotEmpty(t, service.Spec.Ports, "Service should have ports configured")
+			port := service.Spec.Ports[0]
+			assert.Equal(t, int32(8321), port.Port, "Service port should be default 8321")
+			assert.Equal(t, int32(8321), port.TargetPort.IntVal, "Service targetPort should be 8321")
+
+			// Check selector (verify it has the expected structure)
+			expectedSelector := map[string]string{
+				"app.kubernetes.io/managed-by": "llama-stack-operator",
+				"app.kubernetes.io/part-of":    "llama-stack",
+			}
+			assert.Equal(t, expectedSelector, service.Spec.Selector)
+
+			t.Logf("Service validation completed successfully")
+			return
+		}
+
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("Unexpected error getting Service: %v", err)
+		}
+
+		// Log progress every 5 seconds
+		if int(time.Since(start).Seconds())%5 == 0 {
+			t.Logf("Still waiting for Service creation... (%v elapsed)", time.Since(start))
+		}
+
+		time.Sleep(interval)
+	}
+
+	// If we get here, the test failed
+	t.Fatalf("Service %s was not created within %v timeout", serviceKey.Name, timeout)
+}

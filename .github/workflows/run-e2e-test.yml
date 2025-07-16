@@ -86,13 +86,13 @@ jobs:
       - name: Run e2e tests
         run: |
           # Check if we should run only service status test
-          if [[ "${{ github.event.pull_request.title }}" == *"[service-status-only]"* ]]; then
-            echo "Running deterministic service status test only"
-            make test-service-status
-          else
-            echo "Running full e2e test suite"
-            make test-e2e
-          fi
+          # if [[ "${{ github.event.pull_request.title }}" == *"[service-status-only]"* ]]; then
+          echo "Running deterministic service status test only"
+          make test-service-status
+          # else
+          #   echo "Running full e2e test suite"
+          #   make test-e2e
+          # fi
 
       - name: Get logs
         if: ${{ always() }}

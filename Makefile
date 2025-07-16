@@ -152,6 +152,10 @@ test-e2e: ## Run e2e tests
 test-service-status: ## Run deterministic service status test only
 	go test -v ./tests/e2e/ -run TestServiceStatusDeterministic ${E2E_TEST_FLAGS}
 
+.PHONY: test-service-integration
+test-service-integration: manifests generate envtest ## Run service creation integration test
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test -v ./controllers/ -run TestServiceCreationIntegration ${TEST_FLAGS}
+
 GOLANGCI_LINT_TIMEOUT ?= 5m0s
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint against code.
