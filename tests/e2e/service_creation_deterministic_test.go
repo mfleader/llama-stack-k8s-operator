@@ -141,7 +141,7 @@ func hasPortsWouldReturn(llsd *v1alpha1.LlamaStackDistribution) bool {
 // monitorServiceCreationWithOriginalLogic uses the EXACT same Service readiness logic as the original test.
 func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributionName string) {
 	t.Helper()
-	t.Log("=== Using EXACT Original Service Readiness Logic ===")
+	t.Log("=== Using EXACT Original Service Readiness Logic with Enhanced Debugging ===")
 
 	serviceName := distributionName + "-service"
 	serviceGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"}
@@ -169,11 +169,22 @@ func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributi
 	}
 	t.Logf("=== End Pre-Service Check ===")
 
+	// ENHANCED: Check LlamaStackDistribution status before Service check
+	checkLlamaStackDistributionStatus(t, namespace, distributionName)
+
 	// Use EXACT EnsureResourceReady call from original test
 	t.Logf("Starting Service readiness check with %v timeout", ResourceReadyTimeout)
+
+	// ENHANCED: Track timing and attempts
+	startTime := time.Now()
+	attemptCount := 0
+
 	err := EnsureResourceReady(t, TestEnv, serviceGVK, serviceName, namespace, ResourceReadyTimeout, func(u *unstructured.Unstructured) bool {
-		// EXACT debugging logic from original test
-		t.Logf("=== Service Readiness Check Debug (Attempt) ===")
+		attemptCount++
+		elapsed := time.Since(startTime)
+
+		// ENHANCED: More detailed logging with timing
+		t.Logf("\n=== Service Readiness Check Debug (Attempt %d after %v) ===", attemptCount, elapsed.Truncate(time.Second))
 
 		// Check spec field
 		spec, specFound, _ := unstructured.NestedMap(u.Object, "spec")
@@ -186,6 +197,14 @@ func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributi
 		// Log service type for verification
 		serviceType, typeFound, _ := unstructured.NestedString(u.Object, "spec", "type")
 		t.Logf("Service type found: %v, Service type: %s", typeFound, serviceType)
+
+		// ENHANCED: Log service details
+		if specFound {
+			ports, _, _ := unstructured.NestedSlice(u.Object, "spec", "ports")
+			selector, _, _ := unstructured.NestedMap(u.Object, "spec", "selector")
+			t.Logf("Service ports: %v", ports)
+			t.Logf("Service selector: %v", selector)
+		}
 
 		// Log object keys to see what fields actually exist
 		var objectKeys []string
@@ -202,16 +221,28 @@ func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributi
 		fixedResult := specFound && spec != nil
 		t.Logf("Fixed logic result: %v", fixedResult)
 
+		// ENHANCED: Show the difference clearly
+		if fixedResult && !originalResult {
+			t.Logf("🔍 DIFFERENCE: Fixed logic passes but buggy logic fails (attempt %d)", attemptCount)
+		}
+
 		t.Logf("=== End Service Readiness Check Debug ===")
 
 		// Use the original buggy logic to reproduce the failure!
 		return originalResult
 	})
 
-	// This should fail with timeout, just like the original test
+	// ENHANCED: Better failure analysis
 	if err != nil {
-		t.Logf("❌ REPRODUCED ORIGINAL FAILURE: %v", err)
+		finalElapsed := time.Since(startTime)
+		t.Logf("❌ REPRODUCED ORIGINAL FAILURE after %v (%d attempts): %v", finalElapsed, attemptCount, err)
 		t.Log("=== This confirms the issue is in the Service readiness check logic ===")
+
+		// ENHANCED: Show final state
+		t.Log("=== Final State Analysis ===")
+		checkLlamaStackDistributionStatus(t, namespace, distributionName)
+		checkNamespaceEvents(t, namespace)
+		checkOperatorHealth(t)
 
 		// Show what the fix would be
 		t.Log("=== Testing Fix: Using spec-only logic ===")
@@ -232,5 +263,70 @@ func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributi
 		require.NoError(t, err, "Reproduced original failure: Service readiness check timed out")
 	} else {
 		t.Log("🤔 Original logic passed - unable to reproduce failure")
+	}
+}
+
+// ENHANCED: Add helper functions for better debugging
+func checkLlamaStackDistributionStatus(t *testing.T, namespace, name string) {
+	t.Helper()
+
+	llsd := &v1alpha1.LlamaStackDistribution{}
+	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{Namespace: namespace, Name: name}, llsd)
+	if err != nil {
+		t.Logf("⚠️  Error getting LlamaStackDistribution: %v", err)
+		return
+	}
+
+	t.Logf("LlamaStackDistribution status:")
+	t.Logf("  Phase: %s", llsd.Status.Phase)
+	t.Logf("  Generation: %d", llsd.Generation)
+	t.Logf("  ResourceVersion: %s", llsd.ResourceVersion)
+	t.Logf("  Conditions: %+v", llsd.Status.Conditions)
+}
+
+func checkNamespaceEvents(t *testing.T, namespace string) {
+	t.Helper()
+
+	eventList := &corev1.EventList{}
+	err := TestEnv.Client.List(TestEnv.Ctx, eventList, client.InNamespace(namespace))
+	if err != nil {
+		t.Logf("⚠️  Error getting events: %v", err)
+		return
+	}
+
+	if len(eventList.Items) == 0 {
+		t.Log("📝 No events found in namespace")
+		return
+	}
+
+	t.Logf("📝 Found %d events in namespace %s:", len(eventList.Items), namespace)
+	for _, event := range eventList.Items {
+		t.Logf("  %s: %s (%s) - %s",
+			event.LastTimestamp.Format("15:04:05"),
+			event.Reason,
+			event.Type,
+			event.Message)
+	}
+}
+
+func checkOperatorHealth(t *testing.T) {
+	t.Helper()
+
+	operatorNS := "llama-stack-k8s-operator-system"
+	podList := &corev1.PodList{}
+	err := TestEnv.Client.List(TestEnv.Ctx, podList, client.InNamespace(operatorNS))
+	if err != nil {
+		t.Logf("⚠️  Error getting operator pods: %v", err)
+		return
+	}
+
+	for _, pod := range podList.Items {
+		if pod.Labels["control-plane"] == "controller-manager" {
+			t.Logf("Operator pod health: Phase=%s, Ready=%v", pod.Status.Phase, isPodReady(&pod))
+			if len(pod.Status.ContainerStatuses) > 0 {
+				container := pod.Status.ContainerStatuses[0]
+				t.Logf("  Container: Ready=%v, RestartCount=%d", container.Ready, container.RestartCount)
+			}
+		}
 	}
 }
