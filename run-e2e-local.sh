@@ -1,4 +1,3 @@
-❯ cat run-e2e-local.sh
 #!/usr/bin/env bash
 
 set -e
@@ -100,7 +99,7 @@ cleanup() {
             print_warning "Deleting Kind cluster: ${CLUSTER_NAME}"
             kind delete cluster --name "${CLUSTER_NAME}"
         fi
-        
+
         # Clean up docker registry if it exists
         if docker ps -a --format "{{.Names}}" | grep -q "^${REGISTRY_NAME}$"; then
             print_warning "Stopping and removing registry container"
@@ -185,7 +184,7 @@ if ! docker ps --format "{{.Names}}" | grep -q "^${REGISTRY_NAME}$"; then
         docker stop "${REGISTRY_NAME}" || true
         docker rm "${REGISTRY_NAME}" || true
     fi
-    
+
     # Check if registry image exists locally, if not try to pull it
     if ! docker image inspect registry:2.8 > /dev/null 2>&1; then
         print_warning "Registry image not found locally, pulling from Docker Hub..."
@@ -199,13 +198,13 @@ if ! docker ps --format "{{.Names}}" | grep -q "^${REGISTRY_NAME}$"; then
             exit 1
         fi
     fi
-    
+
     print_warning "Creating local registry container"
     if ! docker run -d --restart=always -p "127.0.0.1:${REGISTRY_PORT}:5000" --name "${REGISTRY_NAME}" registry:2.8; then
         print_error "Failed to create registry container"
         exit 1
     fi
-    
+
     # Wait for registry to be ready
     print_warning "Waiting for registry to be ready..."
     for i in {1..30}; do
@@ -264,17 +263,17 @@ print_success "Kind cluster created and registry connected"
 # Build and push operator image
 if [ "$SKIP_BUILD" = false ]; then
     print_step "Building operator image"
-    
+
     IMAGE_NAME="${REGISTRY_NAME}:5000/llama-stack-k8s-operator:${IMAGE_TAG}"
-    
+
     docker build -t "${IMAGE_NAME}" -f Dockerfile .
-    
+
     print_step "Pushing operator image to local registry"
     docker push "localhost:${REGISTRY_PORT}/llama-stack-k8s-operator:${IMAGE_TAG}"
-    
+
     # Tag with registry name that Kind can resolve
     docker tag "${IMAGE_NAME}" "localhost:${REGISTRY_PORT}/llama-stack-k8s-operator:${IMAGE_TAG}"
-    
+
     print_success "Operator image built and pushed"
 else
     print_warning "Skipping image build"
@@ -311,21 +310,21 @@ print_step "Running e2e tests"
 
 if ! go test -v ./tests/e2e/ -run ^TestE2E -v; then
     print_error "E2E tests failed"
-    
+
     # Collect diagnostic information
     print_step "Collecting diagnostic information"
-    
+
     mkdir -p logs
-    
+
     kubectl -n llama-stack-test get all -o yaml > logs/all.log 2>/dev/null || true
     kubectl -n llama-stack-k8s-operator-system logs deployment.apps/llama-stack-k8s-operator-controller-manager > logs/controller-manager.log 2>/dev/null || true
     kubectl -n llama-stack-test describe all > logs/all-describe.log 2>/dev/null || true
     kubectl -n llama-stack-test describe events > logs/events.log 2>/dev/null || true
     kubectl get llamastackdistributions --all-namespaces -o yaml > logs/llamastackdistributions.log 2>/dev/null || true
-    
+
     print_warning "Diagnostic logs saved to ./logs/ directory"
     print_warning "Check the logs for more details about the failure"
-    
+
     exit 1
 fi
 
@@ -339,4 +338,4 @@ echo "Summary:"
 echo "  ✓ Kind cluster: ${CLUSTER_NAME}"
 echo "  ✓ Registry: localhost:${REGISTRY_PORT}"
 echo "  ✓ Operator image: ${IMAGE_NAME}"
-echo "  ✓ E2E tests: PASSED"  
+echo "  ✓ E2E tests: PASSED"

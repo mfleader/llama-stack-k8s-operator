@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// randomString generates a random string of specified length
+// randomString generates a random string of specified length.
 func randomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, length)
@@ -27,7 +27,7 @@ func randomString(length int) string {
 }
 
 // TestServiceStatusDeterministic is designed to deterministically test
-// the Service status issue across different branches
+// the Service status issue across different branches.
 func TestServiceStatusDeterministic(t *testing.T) {
 	t.Log("=== Deterministic Service Status Test ===")
 

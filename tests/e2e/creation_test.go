@@ -19,6 +19,33 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// createNamespaceAndCR creates the test namespace and CR.
+func createNamespaceAndCR(t *testing.T) (*corev1.Namespace, *v1alpha1.LlamaStackDistribution) {
+	t.Helper()
+
+	// Create test namespace
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "llama-stack-test",
+		},
+	}
+	err := TestEnv.Client.Create(TestEnv.Ctx, ns)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		require.NoError(t, err)
+	}
+
+	// Get sample CR
+	llsdistributionCR := GetSampleCR(t)
+	llsdistributionCR.Namespace = ns.Name
+
+	err = TestEnv.Client.Create(TestEnv.Ctx, llsdistributionCR)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		require.NoError(t, err)
+	}
+
+	return ns, llsdistributionCR
+}
+
 func TestCreationSuite(t *testing.T) {
 	if TestOpts.SkipCreation {
 		t.Skip("Skipping creation test suite")
@@ -57,27 +84,11 @@ func TestCreationSuite(t *testing.T) {
 
 func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 	t.Helper()
-	// Create test namespace
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "llama-stack-test",
-		},
-	}
-	err := TestEnv.Client.Create(TestEnv.Ctx, ns)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		require.NoError(t, err)
-	}
 
-	// Get sample CR
-	llsdistributionCR := GetSampleCR(t)
-	llsdistributionCR.Namespace = ns.Name
-
-	err = TestEnv.Client.Create(TestEnv.Ctx, llsdistributionCR)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		require.NoError(t, err)
-	}
+	ns, llsdistributionCR := createNamespaceAndCR(t)
 
 	// Wait for deployment to be ready
+	var err error
 	err = EnsureResourceReady(t, TestEnv, schema.GroupVersionKind{
 		Group:   "apps",
 		Version: "v1",
@@ -95,8 +106,9 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 	serviceObj.SetGroupVersionKind(serviceGVK)
 	serviceKey := client.ObjectKey{Namespace: ns.Name, Name: serviceName}
 
-	if err := TestEnv.Client.Get(TestEnv.Ctx, serviceKey, serviceObj); err != nil {
-		t.Logf("Service %s/%s does not exist yet or error getting it: %v", ns.Name, serviceName, err)
+	getErr := TestEnv.Client.Get(TestEnv.Ctx, serviceKey, serviceObj)
+	if getErr != nil {
+		t.Logf("Service %s/%s does not exist yet or error getting it: %v", ns.Name, serviceName, getErr)
 	} else {
 		t.Logf("Service %s/%s exists! Current object: %+v", ns.Name, serviceName, serviceObj.Object)
 
