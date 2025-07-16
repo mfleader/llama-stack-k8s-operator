@@ -148,6 +148,10 @@ test-e2e: ## Run e2e tests
 	./hack/deploy-quickstart.sh # Deploy Ollama for e2e tests
 	go test -v ./tests/e2e/ -run ^TestE2E -v ${E2E_TEST_FLAGS}
 
+.PHONY: test-service-status
+test-service-status: ## Run deterministic service status test only
+	go test -v ./tests/e2e/ -run TestServiceStatusDeterministic ${E2E_TEST_FLAGS}
+
 GOLANGCI_LINT_TIMEOUT ?= 5m0s
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint against code.

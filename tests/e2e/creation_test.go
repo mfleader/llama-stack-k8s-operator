@@ -85,14 +85,33 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 	}, llsdistributionCR.Name, ns.Name, ResourceReadyTimeout, isDeploymentReady)
 	require.NoError(t, err)
 
-	// Verify service is created
-	err = EnsureResourceReady(t, TestEnv, schema.GroupVersionKind{
-		Group:   "",
-		Version: "v1",
-		Kind:    "Service",
-	}, llsdistributionCR.Name+"-service", ns.Name, ResourceReadyTimeout, func(u *unstructured.Unstructured) bool {
+	// ENHANCED DEBUGGING: Check if service exists at all first
+	t.Logf("=== Pre-Service Check Debug ===")
+	serviceGVK := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"}
+	serviceName := llsdistributionCR.Name + "-service"
+
+	// Try to get the service directly to see what's happening
+	serviceObj := &unstructured.Unstructured{}
+	serviceObj.SetGroupVersionKind(serviceGVK)
+	serviceKey := client.ObjectKey{Namespace: ns.Name, Name: serviceName}
+
+	if err := TestEnv.Client.Get(TestEnv.Ctx, serviceKey, serviceObj); err != nil {
+		t.Logf("Service %s/%s does not exist yet or error getting it: %v", ns.Name, serviceName, err)
+	} else {
+		t.Logf("Service %s/%s exists! Current object: %+v", ns.Name, serviceName, serviceObj.Object)
+
+		// Check current status immediately
+		preSpec, preSpecFound, _ := unstructured.NestedMap(serviceObj.Object, "spec")
+		preStatus, preStatusFound, _ := unstructured.NestedMap(serviceObj.Object, "status")
+		t.Logf("PRE-CHECK: Spec found: %v (nil: %v), Status found: %v, Status content: %+v", preSpecFound, preSpec == nil, preStatusFound, preStatus)
+	}
+	t.Logf("=== End Pre-Service Check ===")
+
+	// Verify service is created with enhanced timeout reporting
+	t.Logf("Starting Service readiness check with %v timeout", ResourceReadyTimeout)
+	err = EnsureResourceReady(t, TestEnv, serviceGVK, serviceName, ns.Name, ResourceReadyTimeout, func(u *unstructured.Unstructured) bool {
 		// DEBUGGING: Log the full Service object structure
-		t.Logf("=== Service Readiness Check Debug ===")
+		t.Logf("=== Service Readiness Check Debug (Attempt) ===")
 
 		// Check spec field
 		spec, specFound, _ := unstructured.NestedMap(u.Object, "spec")
@@ -106,6 +125,13 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 		serviceType, typeFound, _ := unstructured.NestedString(u.Object, "spec", "type")
 		t.Logf("Service type found: %v, Service type: %s", typeFound, serviceType)
 
+		// Log object keys to see what fields actually exist
+		var objectKeys []string
+		for key := range u.Object {
+			objectKeys = append(objectKeys, key)
+		}
+		t.Logf("Service object keys: %v", objectKeys)
+
 		// ORIGINAL BUGGY LOGIC - checking both spec and status (restore this to trigger failures)
 		originalResult := specFound && statusFound && spec != nil && status != nil
 		t.Logf("Original buggy logic result: %v", originalResult)
@@ -114,7 +140,7 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 		fixedResult := specFound && spec != nil
 		t.Logf("Fixed logic result: %v", fixedResult)
 
-		t.Logf("=== End Service Debug ===")
+		t.Logf("=== End Service Readiness Check Debug ===")
 
 		// Use the original buggy logic to potentially trigger failures and gather evidence
 		return originalResult
