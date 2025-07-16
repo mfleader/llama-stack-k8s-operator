@@ -14,6 +14,7 @@ import (
 	"github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -157,6 +158,8 @@ func registerSchemes() {
 		clientgoscheme.AddToScheme,
 		apiextv1.AddToScheme,
 		v1alpha1.AddToScheme,
+		corev1.AddToScheme,
+		appsv1.AddToScheme,
 	}
 
 	for _, schemeFn := range schemes {
