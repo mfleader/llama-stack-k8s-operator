@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/compare"
@@ -35,9 +33,6 @@ func RenderManifest(
 	manifestPath string,
 	ownerInstance *llamav1alpha1.LlamaStackDistribution,
 ) (*resmap.ResMap, error) {
-	// Track disk usage during rendering
-	log.Log.Info("Disk usage before kustomize render", "path", manifestPath, "df", getDiskUsageInfo())
-
 	// fallback to the 'default' directory' if we cannot initially find
 	// the kustomization file
 	finalManifestPath := manifestPath
@@ -53,29 +48,11 @@ func RenderManifest(
 		return nil, fmt.Errorf("failed to run kustomize: %w", err)
 	}
 
-	log.Log.Info("Disk usage after kustomize run", "resource_count", resMapVal.Size(), "df", getDiskUsageInfo())
-
 	if err := applyPlugins(&resMapVal, ownerInstance); err != nil {
 		return nil, err
 	}
 
-	log.Log.Info("Disk usage after plugins", "df", getDiskUsageInfo())
-
 	return &resMapVal, nil
-}
-
-// Helper function to get disk usage info.
-func getDiskUsageInfo() string {
-	cmd := exec.Command("df", "-h", "/")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Sprintf("error: %v", err)
-	}
-	lines := strings.Split(string(output), "\n")
-	if len(lines) >= 2 {
-		return lines[1] // Return just the data line
-	}
-	return "unknown"
 }
 
 // ApplyResources takes a Kustomize ResMap and applies the resources to the cluster.
@@ -236,14 +213,14 @@ func applyPlugins(resMap *resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStack
 				CreateIfNotExists: true,
 			},
 			{
-				SourceValue:       getServicePort(ownerInstance),
+				SourceValue:       getServicePortOrNil(ownerInstance),
 				DefaultValue:      llamav1alpha1.DefaultServerPort,
 				TargetField:       "spec.ports[0].port",
 				TargetKind:        "Service",
 				CreateIfNotExists: true,
 			},
 			{
-				SourceValue:       getServicePort(ownerInstance),
+				SourceValue:       getServicePortOrNil(ownerInstance),
 				DefaultValue:      llamav1alpha1.DefaultServerPort,
 				TargetField:       "spec.ports[0].targetPort",
 				TargetKind:        "Service",
@@ -267,13 +244,14 @@ func getStorageSize(instance *llamav1alpha1.LlamaStackDistribution) string {
 	return ""
 }
 
-// getServicePort extracts the service port from the CR spec.
-func getServicePort(instance *llamav1alpha1.LlamaStackDistribution) int32 {
+// getServicePortOrNil returns the service port or nil if not specified.
+// This allows the field transformer to properly fall back to default values.
+func getServicePortOrNil(instance *llamav1alpha1.LlamaStackDistribution) any {
 	if instance.Spec.Server.ContainerSpec.Port != 0 {
 		return instance.Spec.Server.ContainerSpec.Port
 	}
-	// Returning 0 signals the field transformer to use the default value.
-	return 0
+	// Returning nil signals the field transformer to use the default value.
+	return nil
 }
 
 func FilterExcludeKinds(resMap *resmap.ResMap, kindsToExclude []string) (*resmap.ResMap, error) {

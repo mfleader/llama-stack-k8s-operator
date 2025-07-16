@@ -266,7 +266,7 @@ func monitorServiceCreationWithOriginalLogic(t *testing.T, namespace, distributi
 	}
 }
 
-// ENHANCED: Add helper functions for better debugging
+// ENHANCED: Add helper functions for better debugging.
 func checkLlamaStackDistributionStatus(t *testing.T, namespace, name string) {
 	t.Helper()
 

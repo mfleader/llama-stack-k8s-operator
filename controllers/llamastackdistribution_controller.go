@@ -24,8 +24,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -209,18 +207,10 @@ func (r *LlamaStackDistributionReconciler) determineKindsToExclude(instance *lla
 // reconcileManifestResources applies resources that are managed by the operator
 // based on the instance specification.
 func (r *LlamaStackDistributionReconciler) reconcileManifestResources(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	logger := log.FromContext(ctx)
-
-	// Log disk usage before kustomize processing
-	logger.Info("Disk usage before kustomize processing", "df_output", getDiskUsage())
-
 	resMap, err := deploy.RenderManifest(filesys.MakeFsOnDisk(), manifestsBasePath, instance)
 	if err != nil {
 		return fmt.Errorf("failed to render manifests: %w", err)
 	}
-
-	// Log disk usage after kustomize rendering
-	logger.Info("Disk usage after kustomize rendering", "df_output", getDiskUsage())
 
 	kindsToExclude := r.determineKindsToExclude(instance)
 	filteredResMap, err := deploy.FilterExcludeKinds(resMap, kindsToExclude)
@@ -228,31 +218,11 @@ func (r *LlamaStackDistributionReconciler) reconcileManifestResources(ctx contex
 		return fmt.Errorf("failed to filter manifests: %w", err)
 	}
 
-	// Log disk usage after filtering
-	logger.Info("Disk usage after filtering manifests", "df_output", getDiskUsage())
-
 	if err := deploy.ApplyResources(ctx, r.Client, r.Scheme, instance, filteredResMap); err != nil {
 		return fmt.Errorf("failed to apply manifests: %w", err)
 	}
 
-	// Log disk usage after applying resources
-	logger.Info("Disk usage after applying resources", "df_output", getDiskUsage())
-
 	return nil
-}
-
-// Helper function to get disk usage.
-func getDiskUsage() string {
-	cmd := exec.Command("df", "-h", "/")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Sprintf("error getting disk usage: %v", err)
-	}
-	lines := strings.Split(string(output), "\n")
-	if len(lines) >= 2 {
-		return lines[1] // Return the data line, not the header
-	}
-	return string(output)
 }
 
 // reconcileResources reconciles all resources for the LlamaStackDistribution instance.

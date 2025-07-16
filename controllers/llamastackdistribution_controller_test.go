@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	kubernetesscheme "k8s.io/client-go/kubernetes/scheme" // Alias to avoid conflict
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -460,11 +462,37 @@ server:
 	// so we skip the isConfigMapReferenced checks which rely on field indexing
 }
 
-// TestServiceCreationIntegration specifically tests the Service creation logic
+// TestServiceCreationIntegration specifically tests the Service creation logic.
 // in the kustomize-based reconciliation flow. This test focuses on verifying
 // that Services are created correctly and handles the transition from direct
 // Service creation to kustomize-based creation.
-func TestServiceCreationIntegration(t *testing.T) {
+// getSampleCRForIntegration loads the same sample CR that e2e tests use.
+func getSampleCRForIntegration(t *testing.T) *llamav1alpha1.LlamaStackDistribution {
+	t.Helper()
+
+	// Get the absolute path of the project root (from controllers/ directory)
+	projectRoot, err := filepath.Abs("..")
+	require.NoError(t, err)
+
+	// Construct the path to the sample file
+	samplePath := filepath.Join(projectRoot, "config", "samples", "_v1alpha1_llamastackdistribution.yaml")
+
+	// Read the sample file
+	yamlFile, err := os.ReadFile(samplePath)
+	require.NoError(t, err)
+
+	// Create and unmarshal the distribution using YAML decoder for Kubernetes objects
+	distribution := &llamav1alpha1.LlamaStackDistribution{}
+	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(yamlFile), len(yamlFile))
+	err = decoder.Decode(distribution)
+	require.NoError(t, err)
+
+	return distribution
+}
+
+// setupIntegrationTestEnv sets up the test environment for integration tests.
+func setupIntegrationTestEnv(t *testing.T) (*envtest.Environment, client.Client, *LlamaStackDistributionReconciler, context.Context) {
+	t.Helper()
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	testEnv := &envtest.Environment{
@@ -475,7 +503,6 @@ func TestServiceCreationIntegration(t *testing.T) {
 
 	cfg, err := testEnv.Start()
 	require.NoError(t, err)
-	defer func() { require.NoError(t, testEnv.Stop()) }()
 
 	// Setup scheme
 	k8sScheme := runtime.NewScheme()
@@ -491,7 +518,12 @@ func TestServiceCreationIntegration(t *testing.T) {
 	// Setup reconciler
 	reconciler := setupTestReconciler(ctrlRuntimeClient, k8sScheme)
 
-	ctx := context.Background()
+	return testEnv, ctrlRuntimeClient, reconciler, context.Background()
+}
+
+func TestServiceCreationIntegration(t *testing.T) {
+	testEnv, ctrlRuntimeClient, reconciler, ctx := setupIntegrationTestEnv(t)
+	defer func() { require.NoError(t, testEnv.Stop()) }()
 
 	// Create a test namespace for isolation
 	testenvNamespaceCounter++
@@ -508,20 +540,40 @@ func TestServiceCreationIntegration(t *testing.T) {
 		_ = ctrlRuntimeClient.Delete(ctx, ns)
 	}()
 
-	// Create a test instance with environment variables (to ensure HasPorts() returns true)
-	instance := baseInstance()
+	// *** USE THE SAME GetSampleCR() AS E2E TESTS ***
+	instance := getSampleCRForIntegration(t)
 	instance.Name = "service-test"
 	instance.Namespace = namespace
-	// Add environment variables to make HasPorts() return true
-	instance.Spec.Server.ContainerSpec.Env = []corev1.EnvVar{
-		{
+
+	t.Logf("=== INTEGRATION TEST CR COMPARISON ===")
+	t.Logf("CR Name: %s", instance.Name)
+	t.Logf("CR Namespace: %s", instance.Namespace)
+	t.Logf("CR Generation: %d", instance.Generation)
+	t.Logf("CR UID: %s", instance.UID)
+	t.Logf("CR Env vars count: %d", len(instance.Spec.Server.ContainerSpec.Env))
+	for i, env := range instance.Spec.Server.ContainerSpec.Env {
+		t.Logf("  Env[%d]: %s=%s", i, env.Name, env.Value)
+	}
+	t.Logf("=== END CR COMPARISON ===")
+
+	// Ensure we have environment variables to make HasPorts() return true
+	if instance.Spec.Server.ContainerSpec.Env == nil {
+		instance.Spec.Server.ContainerSpec.Env = []corev1.EnvVar{}
+	}
+
+	// Add inference model if not present (needed for HasPorts() to return true)
+	hasInferenceModel := false
+	for _, env := range instance.Spec.Server.ContainerSpec.Env {
+		if env.Name == "INFERENCE_MODEL" {
+			hasInferenceModel = true
+			break
+		}
+	}
+	if !hasInferenceModel {
+		instance.Spec.Server.ContainerSpec.Env = append(instance.Spec.Server.ContainerSpec.Env, corev1.EnvVar{
 			Name:  "INFERENCE_MODEL",
 			Value: "llama3.2:1b",
-		},
-		{
-			Name:  "OLLAMA_URL",
-			Value: "http://test-service:11434",
-		},
+		})
 	}
 
 	// Create the LlamaStackDistribution instance
@@ -536,7 +588,7 @@ func TestServiceCreationIntegration(t *testing.T) {
 	}
 
 	// Run reconciliation once
-	_, err = reconciler.Reconcile(ctx, req)
+	_, err := reconciler.Reconcile(ctx, req)
 	require.NoError(t, err)
 
 	// Wait for reconciliation by checking if Service is created
@@ -559,6 +611,34 @@ func TestServiceCreationIntegration(t *testing.T) {
 		err := ctrlRuntimeClient.Get(ctx, serviceKey, service)
 		if err == nil {
 			t.Logf("SUCCESS: Service %s created after %v", serviceKey.Name, time.Since(start))
+
+			// *** DETAILED SERVICE COMPARISON WITH E2E ***
+			t.Logf("=== INTEGRATION SERVICE DETAILS ===")
+			t.Logf("Service Name: %s", service.Name)
+			t.Logf("Service Namespace: %s", service.Namespace)
+			t.Logf("Service Type: %s", service.Spec.Type)
+			t.Logf("Service UID: %s", service.UID)
+			t.Logf("Service Generation: %d", service.Generation)
+			t.Logf("Service ResourceVersion: %s", service.ResourceVersion)
+
+			// Check spec field structure
+			t.Logf("Service Spec exists: %t", service.Spec.Type != "")
+			t.Logf("Service Ports count: %d", len(service.Spec.Ports))
+			for i, port := range service.Spec.Ports {
+				t.Logf("  Port[%d]: %d -> %v", i, port.Port, port.TargetPort)
+			}
+			t.Logf("Service Selector: %+v", service.Spec.Selector)
+
+			// Check status field structure (THIS IS THE KEY DIFFERENCE)
+			t.Logf("Service Status exists: %t", service.Status.LoadBalancer.Ingress != nil)
+			t.Logf("Service Status content: %+v", service.Status)
+
+			// Verify this matches e2e readiness check logic
+			specFound := service.Spec.Type != ""
+			statusFound := service.Status.LoadBalancer.Ingress != nil || len(service.Status.Conditions) > 0
+			t.Logf("READINESS CHECK - specFound: %t, statusFound: %t", specFound, statusFound)
+			t.Logf("E2E BUGGY LOGIC RESULT: %t", specFound && statusFound)
+			t.Logf("=== END SERVICE DETAILS ===")
 
 			// Verify Service properties
 			assert.Equal(t, instance.Name+"-service", service.Name)
