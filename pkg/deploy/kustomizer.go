@@ -200,7 +200,7 @@ func applyPlugins(resMap *resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStack
 			{
 				SourceValue:       getStorageSize(ownerInstance),
 				DefaultValue:      llamav1alpha1.DefaultStorageSize.String(),
-				TargetField:       "spec.resources.requests.storage",
+				TargetField:       "/spec/resources/requests/storage",
 				TargetKind:        "PersistentVolumeClaim",
 				CreateIfNotExists: true,
 			},
