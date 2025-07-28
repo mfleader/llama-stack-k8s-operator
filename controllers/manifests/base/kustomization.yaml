@@ -5,9 +5,10 @@ resources:
 - pvc.yaml
 - serviceaccount.yaml
 - scc-binding.yaml
+- service.yaml
 
 labels:
-- includeSelectors: true
+- includeSelectors: false
   pairs:
     app.kubernetes.io/managed-by: llama-stack-operator
     app.kubernetes.io/part-of: llama-stack
