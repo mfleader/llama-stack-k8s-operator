@@ -303,14 +303,6 @@ func AssertServiceAndDeploymentSelectorsAlign(t *testing.T, service *corev1.Serv
 	require.Equal(t, service.Spec.Selector, deployment.Spec.Template.Labels, "Service selector should match deployment pod labels")
 }
 
-// AssertResourceOwnedBy verifies that a resource has the expected owner reference.
-func AssertResourceOwnedBy(t *testing.T, resource metav1.Object, expectedOwnerUID types.UID) {
-	t.Helper()
-	ownerRefs := resource.GetOwnerReferences()
-	require.Len(t, ownerRefs, 1, "Resource should have exactly one owner reference")
-	require.Equal(t, expectedOwnerUID, ownerRefs[0].UID, "Resource should be owned by expected instance")
-}
-
 // AssertNetworkPolicyTargetsDeploymentPods verifies that network policy targets the same pods as deployment.
 func AssertNetworkPolicyTargetsDeploymentPods(t *testing.T, networkPolicy *networkingv1.NetworkPolicy, deployment *appsv1.Deployment) {
 	t.Helper()

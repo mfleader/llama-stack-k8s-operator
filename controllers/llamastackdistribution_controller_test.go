@@ -307,8 +307,8 @@ func TestReconcile(t *testing.T) {
 	AssertNetworkPolicyIsIngressOnly(t, networkpolicy)
 
 	// Resource ownership behaviors
-	AssertResourceOwnedBy(t, service, instance.UID)
-	AssertResourceOwnedBy(t, deployment, instance.UID)
-	AssertResourceOwnedBy(t, networkpolicy, instance.UID)
-	AssertResourceOwnedBy(t, serviceAccount, instance.UID)
+	AssertResourceOwnedByInstance(t, service, instance)
+	AssertResourceOwnedByInstance(t, deployment, instance)
+	AssertResourceOwnedByInstance(t, networkpolicy, instance)
+	AssertResourceOwnedByInstance(t, serviceAccount, instance)
 }
