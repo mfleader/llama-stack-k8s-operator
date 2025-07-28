@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -310,20 +311,67 @@ func AssertNetworkPolicyTargetsDeploymentPods(t *testing.T, networkPolicy *netwo
 		"NetworkPolicy should target same pods as deployment")
 }
 
-// AssertNetworkPolicyAllowsDeploymentPort verifies that network policy allows traffic on deployment container port.
-func AssertNetworkPolicyAllowsDeploymentPort(t *testing.T, networkPolicy *networkingv1.NetworkPolicy, deployment *appsv1.Deployment) {
+// hasMatchingIngressRule is a generic helper function that checks if a network policy
+// contains at least one ingress rule that meets two specific criteria:
+// 1. The rule allows traffic on the specified 'port'.
+// 2. The rule's source (the 'From' field) matches a custom condition defined by the 'peerPredicate'.
+func hasMatchingIngressRule(
+	t *testing.T,
+	policy *networkingv1.NetworkPolicy,
+	port int32,
+	peerPredicate func(peer networkingv1.NetworkPolicyPeer) bool,
+) bool {
+	t.Helper()
+	for _, rule := range policy.Spec.Ingress {
+		// First, check if this rule's source (any of its 'From' peers) matches our criteria.
+		// If not, move on to the next one.
+		if !slices.ContainsFunc(rule.From, peerPredicate) {
+			continue
+		}
+
+		// Check if this same rule also allows traffic on the required port.
+		// Both conditions must be met by a single rule for the policy to be
+		// considered valid.
+		portMatches := slices.ContainsFunc(rule.Ports, func(p networkingv1.NetworkPolicyPort) bool {
+			return p.Port != nil && p.Port.IntVal == port
+		})
+
+		if portMatches {
+			// This rule meets both the source and port requirements.
+			return true
+		}
+	}
+
+	// Returning false signifies that no single rule in the entire policy satisfied
+	// both the source (predicate) and port conditions for this specific check.
+	return false
+}
+
+// AssertNetworkPolicyAllowsDeploymentPort verifies that the network policy
+// allows traffic from both intra-stack components and the operator.
+func AssertNetworkPolicyAllowsDeploymentPort(t *testing.T, networkPolicy *networkingv1.NetworkPolicy, deployment *appsv1.Deployment, operatorNamespace string) {
 	t.Helper()
 	require.Len(t, deployment.Spec.Template.Spec.Containers, 1, "Deployment should have exactly one container")
 	require.Len(t, deployment.Spec.Template.Spec.Containers[0].Ports, 1, "Container should have exactly one port")
-	require.Len(t, networkPolicy.Spec.Ingress, 2, "NetworkPolicy should have exactly two ingress rules")
-	require.Len(t, networkPolicy.Spec.Ingress[0].Ports, 1, "NetworkPolicy first ingress rule should have exactly one port")
-	require.Len(t, networkPolicy.Spec.Ingress[1].Ports, 1, "NetworkPolicy second ingress rule should have exactly one port")
-
 	containerPort := deployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort
-	policyPort1 := networkPolicy.Spec.Ingress[0].Ports[0].Port.IntVal
-	require.Equal(t, containerPort, policyPort1, "NetworkPolicy llama-stack components ingress rule should allow traffic on deployment container port")
-	policyPort2 := networkPolicy.Spec.Ingress[1].Ports[0].Port.IntVal
-	require.Equal(t, containerPort, policyPort2, "NetworkPolicy operator namespace ingress rule should allow traffic on deployment container port")
+
+	// Behavior 1: Verify a rule exists for intra-stack communication.
+	intraStackPredicate := func(peer networkingv1.NetworkPolicyPeer) bool {
+		return peer.PodSelector != nil && peer.PodSelector.MatchLabels["app.kubernetes.io/part-of"] == "llama-stack"
+	}
+	require.True(t,
+		hasMatchingIngressRule(t, networkPolicy, containerPort, intraStackPredicate),
+		"NetworkPolicy is missing a rule to allow traffic from other Llama Stack components on port %d", containerPort)
+
+	// Behavior 2: Verify a rule for operator communication exists.
+	// This allows the operator to communicate with the server pods it manages
+	// from its separate namespace for tasks like health checks.
+	operatorPredicate := func(peer networkingv1.NetworkPolicyPeer) bool {
+		return peer.NamespaceSelector != nil && peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == operatorNamespace
+	}
+	require.True(t,
+		hasMatchingIngressRule(t, networkPolicy, containerPort, operatorPredicate),
+		"NetworkPolicy is missing a rule to allow traffic from the operator in namespace '%s' on port %d", operatorNamespace, containerPort)
 }
 
 // AssertNetworkPolicyIsIngressOnly verifies that network policy is configured for ingress-only traffic.

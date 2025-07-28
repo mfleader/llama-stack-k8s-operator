@@ -303,7 +303,7 @@ func TestReconcile(t *testing.T) {
 
 	// NetworkPolicy behaviors
 	AssertNetworkPolicyTargetsDeploymentPods(t, networkpolicy, deployment)
-	AssertNetworkPolicyAllowsDeploymentPort(t, networkpolicy, deployment)
+	AssertNetworkPolicyAllowsDeploymentPort(t, networkpolicy, deployment, operatorNamespaceName)
 	AssertNetworkPolicyIsIngressOnly(t, networkpolicy)
 
 	// Resource ownership behaviors
