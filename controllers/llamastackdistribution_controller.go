@@ -235,11 +235,6 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 		return fmt.Errorf("failed to reconcile NetworkPolicy: %w", err)
 	}
 
-	// Reconcile manifest-based resources
-	if err := r.reconcileManifestResources(ctx, instance); err != nil {
-		return err
-	}
-
 	// Reconcile the Deployment
 	if err := r.reconcileDeployment(ctx, instance); err != nil {
 		return fmt.Errorf("failed to reconcile Deployment: %w", err)
