@@ -260,6 +260,14 @@ func applyPlugins(resMap *resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStack
 				TargetKind:        "Service",
 				CreateIfNotExists: true,
 			},
+			// {
+			// 	SourceValue:       ownerInstance.GetNamespace(),
+			// 	DefaultValue:      nil,
+			// 	TargetField:       "/spec/ingress/1/from/namespaceSelector/matchLabels",
+			// 	TargetKind:        "NetworkPolicy",
+			// 	CreateIfNotExists: true,
+			// },
+
 		},
 	})
 	if err := fieldTransformerPlugin.Transform(*resMap); err != nil {
