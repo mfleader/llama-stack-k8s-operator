@@ -30,7 +30,7 @@ jobs:
       release_branch: ${{ steps.validate.outputs.release_branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
         with:
           fetch-depth: 0 # Need full history to check existing tags
 
@@ -179,98 +179,22 @@ jobs:
           fi
 
   run-e2e-tests:
-    needs: [generate-release]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
-        with:
-          ref: ${{ needs.generate-release.outputs.release_branch }}
+      needs: generate-release
+      runs-on: ubuntu-24.04
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
+          with:
+            ref: ${{ needs.generate-release.outputs.release_branch }}
 
-      - name: Generate image tag
-        id: tag
-        run: echo "IMAGE_TAG=$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        - name: Generate image tag
+          id: tag
+          run: echo "value=$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Set up Go
-        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491
-        with:
-          go-version: '1.21'
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-
-      - name: Create kind config
-        run: |
-          cat > kind-config.yaml << EOF
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          containerdConfigPatches:
-          - |-
-            [plugins."io.containerd.grpc.v1.cri".registry]
-              config_path = "/etc/containerd/certs.d"
-          nodes:
-          - role: control-plane
-            kubeadmConfigPatches:
-            - |
-              kind: InitConfiguration
-              nodeRegistration:
-                kubeletExtraArgs:
-                  system-reserved: memory=500Mi
-                  eviction-hard: memory.available<200Mi
-            extraPortMappings:
-            - containerPort: 80
-              hostPort: 80
-              protocol: TCP
-            - containerPort: 443
-              hostPort: 443
-              protocol: TCP
-          EOF
-
-      - name: Create k8s Kind Cluster
-        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3
-        with:
-          registry: true
-          registry_name: kind-registry
-          registry_port: 5000
-          registry_enable_delete: true
-          config: kind-config.yaml
-
-      - name: Build and push operator image
-        run: |
-          docker build -t kind-registry:5000/llama-stack-k8s-operator:${{ env.IMAGE_TAG }} .
-          docker tag kind-registry:5000/llama-stack-k8s-operator:${{ env.IMAGE_TAG }} kind-registry:5000/llama-stack-k8s-operator:latest
-          docker push kind-registry:5000/llama-stack-k8s-operator:latest
-
-      - name: Deploy operator
-        run: |
-          make deploy IMG=kind-registry:5000/llama-stack-k8s-operator:latest
-          if ! kubectl wait --for=condition=available --timeout=300s deployment/llama-stack-k8s-operator-controller-manager -n llama-stack-k8s-operator-system; then
-            kubectl describe deployment llama-stack-k8s-operator-controller-manager -n llama-stack-k8s-operator-system
-            kubectl logs -l control-plane=controller-manager -n llama-stack-k8s-operator-system --tail=100
-            kubectl get events -n llama-stack-k8s-operator-system --sort-by='.lastTimestamp'
-            exit 1
-          fi
-
-      - name: Run e2e tests
-        run: make test-e2e
-
-      - name: Get logs on failure
-        if: ${{ failure() }}
-        run: |
-          kubectl -n llama-stack-test get all -o yaml > all.log
-          kubectl -n llama-stack-k8s-operator-system logs deployment.apps/llama-stack-k8s-operator-controller-manager > controller-manager.log
-          kubectl -n llama-stack-test describe all > all-describe.log
-          kubectl -n llama-stack-test describe events > events.log
-          kubectl get llamastackdistributions --all-namespaces -o yaml > llamastackdistributions.log
-
-      - name: Upload logs on failure
-        if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            *.log
-          retention-days: 1
+        - name: run e2e tests
+          uses: ./.github/workflows/run-e2e-test.yml
+          with:
+            image_tag: ${{ steps.tag.outputs.value }}
 
   finalize-release:
     needs: [generate-release, run-e2e-tests]
