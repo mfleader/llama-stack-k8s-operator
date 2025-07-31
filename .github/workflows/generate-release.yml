@@ -30,7 +30,7 @@ jobs:
       release_branch: ${{ steps.validate.outputs.release_branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
+        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
         with:
           fetch-depth: 0 # Need full history to check existing tags
 
@@ -179,22 +179,22 @@ jobs:
           fi
 
   run-e2e-tests:
-      needs: generate-release
-      runs-on: ubuntu-24.04
-      steps:
-        - name: Checkout code
-          uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
-          with:
-            ref: ${{ needs.generate-release.outputs.release_branch }}
+    needs: generate-release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
+        with:
+          ref: ${{ needs.generate-release.outputs.release_branch }}
 
-        - name: Generate image tag
-          id: tag
-          run: echo "value=$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Generate image tag
+        id: tag
+        run: echo "value=$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-        - name: run e2e tests
-          uses: ./.github/workflows/run-e2e-test.yml
-          with:
-            image_tag: ${{ steps.tag.outputs.value }}
+      - name: Run e2e tests
+        uses: ./.github/workflows/run-e2e-test.yml
+        with:
+          image_tag: ${{ steps.tag.outputs.value }}
 
   finalize-release:
     needs: [generate-release, run-e2e-tests]
@@ -205,10 +205,10 @@ jobs:
       release_branch: ${{ needs.generate-release.outputs.release_branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@8edcb1b93a05973e722668b8b9b478374944410d
+        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
         with:
           ref: ${{ env.release_branch }}
-          fetch-depth: 0
+          fetch-depth: 0 # Need full history to check existing tags
 
       - name: Configure git
         shell: bash
