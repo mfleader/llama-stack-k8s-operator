@@ -18,8 +18,12 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -819,8 +823,97 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 	return deploy.ApplyDeployment(ctx, r.Client, r.Scheme, instance, deployment, logger)
 }
 
+// getServerURL returns the URL for the LlamaStack server.
+func (r *LlamaStackDistributionReconciler) getServerURL(instance *llamav1alpha1.LlamaStackDistribution, path string) *url.URL {
+	serviceName := deploy.GetServiceName(instance)
+	port := deploy.GetServicePort(instance)
+
+	return &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s.%s.svc.cluster.local:%d", serviceName, instance.Namespace, port),
+		Path:   path,
+	}
+}
+
+// getProviderInfo makes an HTTP request to the providers endpoint.
+func (r *LlamaStackDistributionReconciler) getProviderInfo(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) ([]llamav1alpha1.ProviderInfo, error) {
+	u := r.getServerURL(instance, "/v1/providers")
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create providers request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make providers request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to query providers endpoint: returned status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read providers response: %w", err)
+	}
+
+	var response struct {
+		Data []llamav1alpha1.ProviderInfo `json:"data"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal providers response: %w", err)
+	}
+
+	return response.Data, nil
+}
+
+// getVersionInfo makes an HTTP request to the version endpoint.
+func (r *LlamaStackDistributionReconciler) getVersionInfo(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (string, error) {
+	u := r.getServerURL(instance, "/v1/version")
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create version request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to make version request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to query version endpoint: returned status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read version response: %w", err)
+	}
+
+	var response struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("failed to unmarshal version response: %w", err)
+	}
+
+	return response.Version, nil
+}
+
 // updateStatus refreshes the LlamaStack status.
 func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution, reconcileErr error) error {
+	logger := log.FromContext(ctx)
 	// Initialize OperatorVersion if not set
 	if instance.Status.Version.OperatorVersion == "" {
 		instance.Status.Version.OperatorVersion = os.Getenv("OPERATOR_VERSION")
@@ -843,10 +936,25 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 
 		if deploymentReady {
 			instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseReady
+
+			providers, err := r.getProviderInfo(ctx, instance)
+			if err != nil {
+				logger.Error(err, "failed to get provider info, clearing provider list")
+				instance.Status.DistributionConfig.Providers = nil
+			} else {
+				instance.Status.DistributionConfig.Providers = providers
+			}
+
+			version, err := r.getVersionInfo(ctx, instance)
+			if err != nil {
+				logger.Error(err, "failed to get version info from API endpoint")
+				// Don't clear the version if we cant fetch it - keep the existing one
+			} else {
+				instance.Status.Version.LlamaStackServerVersion = version
+				logger.V(1).Info("Updated LlamaStack version from API endpoint", "version", version)
+			}
+
 			SetHealthCheckCondition(&instance.Status, true, MessageHealthCheckPassed)
-			// Since the deployment is ready, we can now get the provider and version info.
-			// In a real-world scenario, you might get this from the pod's annotations or another source.
-			// For now, we'll leave this part out as we're relying on the deployment status for readiness.
 		} else {
 			// If not ready, health can't be checked. Set condition appropriately.
 			SetHealthCheckCondition(&instance.Status, false, "Deployment not ready")
