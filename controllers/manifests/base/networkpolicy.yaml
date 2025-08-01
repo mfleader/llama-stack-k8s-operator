@@ -6,8 +6,8 @@ spec:
   # hardcode the selector the test is looking for.
   podSelector:
     matchLabels:
-      app: llama-stack
-      app.kubernetes.io/instance: llamastackdistribution-sample
+      # app: llama-stack
+      # app.kubernetes.io/instance: llamastackdistribution-sample
   policyTypes:
   - Ingress
   ingress:

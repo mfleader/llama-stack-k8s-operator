@@ -260,6 +260,20 @@ func applyPlugins(resMap *resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStack
 				TargetKind:        "Service",
 				CreateIfNotExists: true,
 			},
+			{
+				SourceValue:       nil,
+				DefaultValue:      llamav1alpha1.DefaultLabelValue,
+				TargetField:       "/spec/podSelector/matchLabels/" + llamav1alpha1.DefaultLabelKey,
+				TargetKind:        "NetworkPolicy",
+				CreateIfNotExists: true,
+			},
+			{
+				SourceValue:       ownerInstance.GetName(),
+				DefaultValue:      nil,
+				TargetField:       "/spec/podSelector/matchLabels/app.kubernetes.io~1instance",
+				TargetKind:        "NetworkPolicy",
+				CreateIfNotExists: false,
+			},
 			// {
 			// 	SourceValue:       ownerInstance.GetNamespace(),
 			// 	DefaultValue:      nil,
