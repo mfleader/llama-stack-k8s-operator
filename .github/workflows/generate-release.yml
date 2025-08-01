@@ -30,7 +30,7 @@ jobs:
       release_branch: ${{ steps.validate.outputs.release_branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0 # Need full history to check existing tags
 
@@ -183,7 +183,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ needs.generate-release.outputs.release_branch }}
 
@@ -205,7 +205,7 @@ jobs:
       release_branch: ${{ needs.generate-release.outputs.release_branch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab11de18f72a3929bde11228ec # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.release_branch }}
           fetch-depth: 0 # Need full history to check existing tags
