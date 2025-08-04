@@ -219,25 +219,38 @@ func testDistributionStatus(t *testing.T, llsdistributionCR *v1alpha1.LlamaStack
 	}, updatedDistribution)
 	require.NoError(t, err)
 
-	// Verify distribution config (but allow it to be empty for some distributions)
-	if len(updatedDistribution.Status.DistributionConfig.AvailableDistributions) > 0 {
-		require.NotEmpty(t, updatedDistribution.Status.DistributionConfig.AvailableDistributions,
-			"Available distributions should be populated")
-	}
+	// comment out the old, lenient if blocks
+	// // Verify distribution config (but allow it to be empty for some distributions)
+	// if len(updatedDistribution.Status.DistributionConfig.AvailableDistributions) > 0 {
+	// 	require.NotEmpty(t, updatedDistribution.Status.DistributionConfig.AvailableDistributions,
+	// 		"Available distributions should be populated")
+	// }
+	//
+	// if updatedDistribution.Status.DistributionConfig.ActiveDistribution != "" {
+	// 	require.Equal(t, updatedDistribution.Spec.Server.Distribution.Name,
+	// 		updatedDistribution.Status.DistributionConfig.ActiveDistribution,
+	// 		"Active distribution should match the spec")
+	// }
+	//
+	// // Verify provider config and health (but allow it to be empty for some distributions)
+	// if len(updatedDistribution.Status.DistributionConfig.Providers) > 0 {
+	// 	// Verify that each provider has config and health info
+	// 	validateProviders(t, updatedDistribution)
+	// } else {
+	// 	t.Log("No providers found in distribution status - this might be expected for some distributions")
+	// }
 
-	if updatedDistribution.Status.DistributionConfig.ActiveDistribution != "" {
-		require.Equal(t, updatedDistribution.Spec.Server.Distribution.Name,
-			updatedDistribution.Status.DistributionConfig.ActiveDistribution,
-			"Active distribution should match the spec")
-	}
+	// add new, stricter assertions for this specific test case
+	require.NotEmpty(t, updatedDistribution.Status.DistributionConfig.AvailableDistributions, "status must contain the list of available distributions")
+	require.Equal(t, updatedDistribution.Spec.Server.Distribution.Name, updatedDistribution.Status.DistributionConfig.ActiveDistribution, "active distribution in status must match the spec")
+	require.Len(t, updatedDistribution.Status.DistributionConfig.Providers, 1, "should find exactly one provider in status for the ollama test case")
 
-	// Verify provider config and health (but allow it to be empty for some distributions)
-	if len(updatedDistribution.Status.DistributionConfig.Providers) > 0 {
-		// Verify that each provider has config and health info
-		validateProviders(t, updatedDistribution)
-	} else {
-		t.Log("No providers found in distribution status - this might be expected for some distributions")
-	}
+	actualProvider := updatedDistribution.Status.DistributionConfig.Providers[0]
+	expectedProviderID := "ollama"
+	require.Equal(t, expectedProviderID, actualProvider.ProviderID, "the provider ID in the status must match the configured distribution")
+
+	// call the deeper validation function now that we've confirmed the provider exists
+	validateProviders(t, updatedDistribution)
 
 	// Write the final distribution status to a file for CI to collect
 	yaml, err := yaml.Marshal(updatedDistribution)
