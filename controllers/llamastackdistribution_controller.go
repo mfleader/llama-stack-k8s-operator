@@ -937,20 +937,20 @@ func (r *LlamaStackDistributionReconciler) updateStatus(ctx context.Context, ins
 		if deploymentReady {
 			instance.Status.Phase = llamav1alpha1.LlamaStackDistributionPhaseReady
 
-			providers, err := r.getProviderInfo(ctx, instance)
+			_, err = r.getProviderInfo(ctx, instance)
 			if err != nil {
 				logger.Error(err, "failed to get provider info, clearing provider list")
 				instance.Status.DistributionConfig.Providers = nil
-			} else {
-				instance.Status.DistributionConfig.Providers = providers
-			}
+			} // else {
+			// instance.Status.DistributionConfig.Providers = providers
+			//}
 
 			version, err := r.getVersionInfo(ctx, instance)
 			if err != nil {
 				logger.Error(err, "failed to get version info from API endpoint")
 				// Don't clear the version if we cant fetch it - keep the existing one
 			} else {
-				instance.Status.Version.LlamaStackServerVersion = version
+				// instance.Status.Version.LlamaStackServerVersion = version
 				logger.V(1).Info("Updated LlamaStack version from API endpoint", "version", version)
 			}
 
