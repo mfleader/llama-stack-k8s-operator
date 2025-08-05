@@ -375,6 +375,7 @@ func TestLlamaStackProviderAndVersionInfo(t *testing.T) {
 
 	// create the mock http client that uses our custom roundtripper
 	mockClient := &http.Client{
+		Timeout: 5 * time.Second,
 		Transport: &mockRoundTripper{
 			// simulate the RoundTrip logic to handle different API paths
 			RoundTripFunc: func(req *http.Request) (*http.Response, error) {
