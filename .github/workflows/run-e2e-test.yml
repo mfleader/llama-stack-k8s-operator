@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [ main ]
+  workflow_call:
+    inputs:
+      image_tag:
+        description: 'Image tag to use for the operator image'
+        required: true
+        type: string
 
 jobs:
   e2e-tests:
@@ -59,11 +65,14 @@ jobs:
 
       - name: Build operator image
         run: |
-          # Build the image with a simpler tag format
-          docker build -t kind-registry:5000/llama-stack-k8s-operator:pr${{ github.event.pull_request.number }} -f Dockerfile .
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            IMAGE_TAG="${{ inputs.image_tag }}"
+          else
+            IMAGE_TAG="pr${{ github.event.pull_request.number }}"
+          fi
 
-          # Tag the image for local registry
-          docker tag kind-registry:5000/llama-stack-k8s-operator:pr${{ github.event.pull_request.number }} kind-registry:5000/llama-stack-k8s-operator:latest
+          docker build -t kind-registry:5000/llama-stack-k8s-operator:${IMAGE_TAG} -f Dockerfile .
+          docker tag kind-registry:5000/llama-stack-k8s-operator:${IMAGE_TAG} kind-registry:5000/llama-stack-k8s-operator:latest
 
       - name: Push operator image to local registry
         run: |
