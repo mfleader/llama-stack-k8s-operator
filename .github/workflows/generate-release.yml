@@ -196,7 +196,7 @@ jobs:
   run-e2e-tests:
     name: step name
     needs: [generate-release, generate-e2e-tag]
-    uses: llamastack/llama-stack-k8s-operator/.github/workflows/run-e2e-test.yml@5df56aef0e574de14c98b0d5acce4d1129811560
+    uses: llamastack/llama-stack-k8s-operator/.github/workflows/run-e2e-test.yml@200881258fba8f0411003062e47e94c0a397b7c4
     with:
       image_tag: ${{ needs.generate-e2e-tag.outputs.image_tag }}
 
