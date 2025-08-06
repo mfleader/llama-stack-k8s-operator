@@ -194,8 +194,9 @@ jobs:
         run: echo "value=${{ needs.generate-release.outputs.release_branch }}_$(date +%m%d-%H%M)_$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
   run-e2e-tests:
+    name: new name
     needs: [generate-release, generate-e2e-tag]
-    uses: llamastack/llama-stack-k8s-operator/.github/workflows/run-e2e-test.yml@enable-e2e-wf-call
+    uses: llamastack/llama-stack-k8s-operator/.github/workflows/run-e2e-test.yml@enable-e2e-wf-call@bb56647b3d4c65d7c55c7867b742e313c6c9fb75
     with:
       image_tag: ${{ needs.generate-e2e-tag.outputs.image_tag }}
 
