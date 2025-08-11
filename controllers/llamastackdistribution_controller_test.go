@@ -3,6 +3,7 @@ package controllers_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -452,4 +453,57 @@ func TestLlamaStackProviderAndVersionInfo(t *testing.T) {
 	require.Equal(t, expectedLlamaStackVersionInfo,
 		updatedInstance.Status.Version.LlamaStackServerVersion,
 		"server version should match the mock response")
+}
+
+func TestNetworkPolicyConfiguration(t *testing.T) {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, instance *llamav1alpha1.LlamaStackDistribution)
+	}{
+		{
+			name: "enabled then disabled deletes NetworkPolicy",
+			setup: func(t *testing.T, instance *llamav1alpha1.LlamaStackDistribution) {
+				t.Helper()
+				// ensure NetworkPolicy exists by reconciling with feature enabled.
+				ReconcileDistribution(t, instance, true)
+				waitForResource(t, k8sClient, instance.Namespace, instance.Name+"-network-policy", &networkingv1.NetworkPolicy{})
+			},
+		},
+		{
+			name: "disabled from start leaves NetworkPolicy absent",
+			setup: func(t *testing.T, instance *llamav1alpha1.LlamaStackDistribution) {
+				// no setup needed - NetworkPolicy doesn't exist
+				t.Helper()
+			},
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// --- arrange ---
+			operatorNamespaceName := "test-operator-namespace"
+			t.Setenv("OPERATOR_NAMESPACE", operatorNamespaceName)
+
+			namespace := createTestNamespace(t, "test-networkpolicy")
+			instance := NewDistributionBuilder().
+				WithName(fmt.Sprintf("np-config-%d", i)).
+				WithNamespace(namespace.Name).
+				WithDistribution("starter").
+				Build()
+			require.NoError(t, k8sClient.Create(context.Background(), instance))
+			t.Cleanup(func() { _ = k8sClient.Delete(context.Background(), instance) })
+
+			// preconditions for this scenario
+			tt.setup(t, instance)
+
+			// --- act ---
+			ReconcileDistribution(t, instance, false)
+
+			// --- assert ---
+			npKey := types.NamespacedName{Name: instance.Name + "-network-policy", Namespace: instance.Namespace}
+			AssertNetworkPolicyAbsent(t, k8sClient, npKey)
+		})
+	}
 }
