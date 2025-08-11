@@ -384,7 +384,11 @@ func TestLlamaStackProviderAndVersionInfo(t *testing.T) {
 				if req.URL.Path == "/v1/version" {
 					return newMockAPIResponse(t, versionData), nil
 				}
-				return nil, http.ErrNotSupported
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Body:       io.NopCloser(strings.NewReader("")),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
 			},
 		},
 	}
