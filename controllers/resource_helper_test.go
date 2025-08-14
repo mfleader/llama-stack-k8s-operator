@@ -648,6 +648,9 @@ func TestValidateConfigMapKeys(t *testing.T) {
 	}
 }
 
+// newDefaultReadinessProbe returns a Kubernetes HTTP readiness probe that checks
+// the "/v1/health" endpoint on the given port using default timing and
+// threshold settings.
 func newDefaultReadinessProbe(port int32) *corev1.Probe {
 	return &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
