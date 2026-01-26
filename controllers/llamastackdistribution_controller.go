@@ -1053,7 +1053,8 @@ func (r *LlamaStackDistributionReconciler) getProviderInfo(ctx context.Context, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to make providers request: %w", err)
 	}
-	defer resp.Body.Close()
+	// Close error after successful read is not actionable; anon func required to explicitly discard return value
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to query providers endpoint: returned status code %d", resp.StatusCode)
@@ -1087,7 +1088,8 @@ func (r *LlamaStackDistributionReconciler) getVersionInfo(ctx context.Context, i
 	if err != nil {
 		return "", fmt.Errorf("failed to make version request: %w", err)
 	}
-	defer resp.Body.Close()
+	// Close error after successful read is not actionable; anon func required to explicitly discard return value
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to query version endpoint: returned status code %d", resp.StatusCode)

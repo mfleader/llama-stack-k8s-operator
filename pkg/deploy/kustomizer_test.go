@@ -37,7 +37,7 @@ func setupApplyResourcesTest(t *testing.T, ownerName string) (context.Context, s
 	require.NoError(t, k8sClient.Create(ctx, ns))
 	t.Cleanup(func() {
 		cancel()
-		require.NoError(t, k8sClient.Delete(context.Background(), ns)) //nolint:usetesting
+		require.NoError(t, k8sClient.Delete(context.Background(), ns))
 	})
 
 	owner := &llamav1alpha1.LlamaStackDistribution{
