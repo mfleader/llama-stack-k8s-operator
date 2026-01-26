@@ -123,8 +123,8 @@ GOLANGCI_TMP_FILE = .golangci.mktmp.yml
 .PHONY: fmt
 fmt: golangci-lint yq ## Formats code and imports.
 	go fmt ./...
-	$(YQ) e '.linters = {"disable-all": true, "enable": ["gci"]}' .golangci.yml  > $(GOLANGCI_TMP_FILE)
-	$(GOLANGCI_LINT) run --config=$(GOLANGCI_TMP_FILE) --fix
+	$(YQ) e '.version = "2" | .formatters.enable = ["gci"] | .formatters.settings.gci = .linters.settings.gci' .golangci.yml > $(GOLANGCI_TMP_FILE)
+	$(GOLANGCI_LINT) fmt --config=$(GOLANGCI_TMP_FILE)
 
 .PHONY: clean
 clean: ## Remove temporary files, caches, and downloaded tools
@@ -289,7 +289,7 @@ CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.17.2
 ENVTEST_VERSION ?= release-0.19
-GOLANGCI_LINT_VERSION ?= v1.64.4
+GOLANGCI_LINT_VERSION ?= v2.8.0
 YQ_VERSION ?= v4.45.3
 YAMLFMT_VERSION ?= v0.12.0
 CRD_REF_DOCS_VERSION = v0.2.0
@@ -312,7 +312,7 @@ $(ENVTEST): $(LOCALBIN)
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
-	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 
 .PHONY: yq
 yq: $(YQ) ## Download yq locally if necessary.
