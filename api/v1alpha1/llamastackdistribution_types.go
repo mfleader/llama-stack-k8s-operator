@@ -196,9 +196,13 @@ type PodOverrides struct {
 	// ServiceAccountName allows users to specify their own ServiceAccount
 	// If not specified, the operator will use the default ServiceAccount
 	// +optional
-	ServiceAccountName string               `json:"serviceAccountName,omitempty"`
-	Volumes            []corev1.Volume      `json:"volumes,omitempty"`
-	VolumeMounts       []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
+	// TerminationGracePeriodSeconds is the time allowed for graceful pod shutdown.
+	// If not specified, Kubernetes defaults to 30 seconds.
+	// +optional
+	TerminationGracePeriodSeconds *int64               `json:"terminationGracePeriodSeconds,omitempty"`
+	Volumes                       []corev1.Volume      `json:"volumes,omitempty"`
+	VolumeMounts                  []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // PodDisruptionBudgetSpec defines voluntary disruption controls.

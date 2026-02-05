@@ -532,6 +532,11 @@ func configurePodOverrides(instance *llamav1alpha1.LlamaStackDistribution, podSp
 				podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, instance.Spec.Server.PodOverrides.VolumeMounts...)
 			}
 		}
+
+		// Apply termination grace period if specified
+		if instance.Spec.Server.PodOverrides.TerminationGracePeriodSeconds != nil {
+			podSpec.TerminationGracePeriodSeconds = instance.Spec.Server.PodOverrides.TerminationGracePeriodSeconds
+		}
 	}
 }
 
