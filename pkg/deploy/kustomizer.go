@@ -271,7 +271,7 @@ func applyNetworkPolicyTransformer(resMap *resmap.ResMap, ownerInstance *llamav1
 		NetworkSpec:       ownerInstance.Spec.Network,
 	}
 
-	if ownerInstance.Spec.Network != nil && len(ownerInstance.Spec.Network.AllowedTo) > 0 {
+	if ownerInstance.Spec.Network != nil && ownerInstance.Spec.Network.AllowedTo != nil {
 		kubeAPIServerHost, kubeAPIServerPort, err := GetAPIServerEndpoint()
 		if err != nil {
 			return fmt.Errorf("failed to get API server endpoint: %w", err)

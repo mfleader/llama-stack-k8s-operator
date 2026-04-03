@@ -288,7 +288,7 @@ func TestNetworkPolicyTransformer_AllowedTo(t *testing.T) {
 		APIServerHost:     "10.96.0.1",
 		APIServerPort:     443,
 		NetworkSpec: &llamav1alpha1.NetworkSpec{
-			AllowedTo: []llamav1alpha1.EgressRule{
+			AllowedTo: &[]llamav1alpha1.EgressRule{
 				{Namespace: "ollama-dist", Port: &ollamaPort},
 			},
 		},
@@ -322,6 +322,90 @@ func TestNetworkPolicyTransformer_AllowedTo(t *testing.T) {
 	assert.Contains(t, yamlStr, "port: 11434")
 }
 
+func TestNetworkPolicyTransformer_AllowedToEmpty(t *testing.T) {
+	rf := resource.NewFactory(nil)
+	res, err := rf.FromBytes([]byte(networkPolicyTestYAML))
+	require.NoError(t, err)
+
+	rm := resmap.New()
+	require.NoError(t, rm.Append(res))
+
+	// Explicitly empty AllowedTo (non-nil pointer to empty slice):
+	// egress should be locked down to DNS + API server baseline only.
+	emptyRules := &[]llamav1alpha1.EgressRule{}
+	transformer := CreateNetworkPolicyTransformer(NetworkPolicyTransformerConfig{
+		InstanceName:      "test-instance",
+		ServicePort:       8321,
+		OperatorNamespace: "operator-ns",
+		APIServerHost:     "10.96.0.1",
+		APIServerPort:     443,
+		NetworkSpec: &llamav1alpha1.NetworkSpec{
+			AllowedTo: emptyRules,
+		},
+	})
+
+	err = transformer.Transform(rm)
+	require.NoError(t, err)
+
+	transformedRes := rm.Resources()[0]
+	yamlBytes, err := transformedRes.AsYAML()
+	require.NoError(t, err)
+
+	yamlStr := string(yamlBytes)
+
+	// Egress policyType should be added
+	assert.Contains(t, yamlStr, "Egress")
+
+	// DNS baseline rules should be present
+	assert.Contains(t, yamlStr, "k8s-app: kube-dns")
+	assert.Contains(t, yamlStr, "kubernetes.io/metadata.name: kube-system")
+	assert.Contains(t, yamlStr, "kubernetes.io/metadata.name: openshift-dns")
+
+	// API server rule should be present
+	assert.Contains(t, yamlStr, "cidr: 10.96.0.1/32")
+
+	// No user-specified destinations
+	assert.NotContains(t, yamlStr, "kubernetes.io/metadata.name: model-serving")
+	assert.NotContains(t, yamlStr, "kubernetes.io/metadata.name: ollama-dist")
+}
+
+func TestNetworkPolicyTransformer_NetworkSpecWithNilAllowedTo(t *testing.T) {
+	rf := resource.NewFactory(nil)
+	res, err := rf.FromBytes([]byte(networkPolicyTestYAML))
+	require.NoError(t, err)
+
+	rm := resmap.New()
+	require.NoError(t, rm.Append(res))
+
+	// NetworkSpec is set (with AllowedFrom) but AllowedTo is nil:
+	// egress should be unrestricted (no Egress policyType, no egress rules).
+	transformer := CreateNetworkPolicyTransformer(NetworkPolicyTransformerConfig{
+		InstanceName:      "test-instance",
+		ServicePort:       8321,
+		OperatorNamespace: "operator-ns",
+		NetworkSpec: &llamav1alpha1.NetworkSpec{
+			AllowedFrom: &llamav1alpha1.AllowedFromSpec{
+				Namespaces: []string{"my-app"},
+			},
+			AllowedTo: nil,
+		},
+	})
+
+	err = transformer.Transform(rm)
+	require.NoError(t, err)
+
+	transformedRes := rm.Resources()[0]
+	yamlBytes, err := transformedRes.AsYAML()
+	require.NoError(t, err)
+
+	yamlStr := string(yamlBytes)
+
+	// Egress should NOT be restricted
+	assert.NotContains(t, yamlStr, "Egress")
+	assert.NotContains(t, yamlStr, "k8s-app: kube-dns")
+	assert.NotContains(t, yamlStr, "cidr:")
+}
+
 func TestNetworkPolicyTransformer_AllowedToWithoutPort(t *testing.T) {
 	rf := resource.NewFactory(nil)
 	res, err := rf.FromBytes([]byte(networkPolicyTestYAML))
@@ -337,7 +421,7 @@ func TestNetworkPolicyTransformer_AllowedToWithoutPort(t *testing.T) {
 		APIServerHost:     "10.96.0.1",
 		APIServerPort:     443,
 		NetworkSpec: &llamav1alpha1.NetworkSpec{
-			AllowedTo: []llamav1alpha1.EgressRule{
+			AllowedTo: &[]llamav1alpha1.EgressRule{
 				{Namespace: "model-serving"},
 			},
 		},
