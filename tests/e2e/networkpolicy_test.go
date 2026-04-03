@@ -79,7 +79,7 @@ func createNetworkPolicyTestCR(name, namespace string, extraEgress ...v1alpha1.E
 					},
 				},
 			},
-			Network: &v1alpha1.NetworkSpec{AllowedTo: rules},
+			Network: &v1alpha1.NetworkSpec{AllowedTo: &rules},
 		},
 	}
 }

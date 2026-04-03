@@ -274,11 +274,12 @@ func (t *networkPolicyTransformer) Config(_ *resmap.PluginHelpers, _ []byte) err
 }
 
 func (t *networkPolicyTransformer) hasEgressConfig() bool {
-	return t.config.NetworkSpec != nil && len(t.config.NetworkSpec.AllowedTo) > 0
+	return t.config.NetworkSpec != nil && t.config.NetworkSpec.AllowedTo != nil
 }
 
 func (t *networkPolicyTransformer) buildEgressRules() []any {
-	numDestinations := len(t.config.NetworkSpec.AllowedTo)
+	allowedTo := *t.config.NetworkSpec.AllowedTo
+	numDestinations := len(allowedTo)
 	rules := make([]any, 0, 2+numDestinations)
 	rules = append(rules,
 		// Vanilla Kubernetes DNS (CoreDNS in kube-system listens on port 53)
@@ -336,7 +337,7 @@ func (t *networkPolicyTransformer) buildEgressRules() []any {
 		},
 	)
 
-	for _, dest := range t.config.NetworkSpec.AllowedTo {
+	for _, dest := range allowedTo {
 		rule := map[string]any{
 			"to": []any{
 				map[string]any{

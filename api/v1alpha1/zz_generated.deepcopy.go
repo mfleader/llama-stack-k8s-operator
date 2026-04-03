@@ -318,9 +318,13 @@ func (in *NetworkSpec) DeepCopyInto(out *NetworkSpec) {
 	}
 	if in.AllowedTo != nil {
 		in, out := &in.AllowedTo, &out.AllowedTo
-		*out = make([]EgressRule, len(*in))
-		for i := range *in {
-			(*in)[i].DeepCopyInto(&(*out)[i])
+		*out = new([]EgressRule)
+		if **in != nil {
+			in, out := *in, *out
+			*out = make([]EgressRule, len(*in))
+			for i := range *in {
+				(*in)[i].DeepCopyInto(&(*out)[i])
+			}
 		}
 	}
 }

@@ -192,7 +192,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `exposeRoute` _boolean_ | ExposeRoute when true, creates an Ingress for external access.<br />Default is false (internal access only). | false |  |
 | `allowedFrom` _[AllowedFromSpec](#allowedfromspec)_ | AllowedFrom defines which namespaces are allowed to access the LlamaStack service.<br />By default, only the LLSD namespace and the operator namespace are allowed. |  |  |
-| `allowedTo` _[EgressRule](#egressrule) array_ | AllowedTo defines egress destinations the LlamaStack pods are allowed to reach.<br />When set, egress is restricted to these destinations plus DNS and the Kubernetes API server.<br />When not set, egress is unrestricted. |  |  |
+| `allowedTo` _[EgressRule](#egressrule)_ | AllowedTo defines egress destinations the LlamaStack pods are allowed to reach.<br />When set, egress is restricted to these destinations plus DNS and the Kubernetes API server.<br />When explicitly empty (allowedTo: []), egress is restricted to DNS and API server only.<br />When not set (nil), egress is unrestricted. |  |  |
 
 #### PodDisruptionBudgetSpec
 
