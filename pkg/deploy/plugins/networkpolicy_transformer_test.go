@@ -22,6 +22,10 @@ import (
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/kustomize/api/resmap"
 	"sigs.k8s.io/kustomize/api/resource"
 )
@@ -280,7 +284,8 @@ func TestNetworkPolicyTransformer_AllowedTo(t *testing.T) {
 	rm := resmap.New()
 	require.NoError(t, rm.Append(res))
 
-	ollamaPort := int32(11434)
+	ollamaPort := intstr.FromInt32(11434)
+	protocolTCP := corev1.ProtocolTCP
 	transformer := CreateNetworkPolicyTransformer(NetworkPolicyTransformerConfig{
 		InstanceName:      "test-instance",
 		ServicePort:       8321,
@@ -288,8 +293,24 @@ func TestNetworkPolicyTransformer_AllowedTo(t *testing.T) {
 		APIServerHost:     "10.96.0.1",
 		APIServerPort:     443,
 		NetworkSpec: &llamav1alpha1.NetworkSpec{
-			AllowedTo: &[]llamav1alpha1.EgressRule{
-				{Namespace: "ollama-dist", Port: &ollamaPort},
+			AllowedTo: &[]networkingv1.NetworkPolicyEgressRule{
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "ollama-dist",
+								},
+							},
+						},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: &protocolTCP,
+							Port:     &ollamaPort,
+						},
+					},
+				},
 			},
 		},
 	})
@@ -332,7 +353,7 @@ func TestNetworkPolicyTransformer_AllowedToEmpty(t *testing.T) {
 
 	// Explicitly empty AllowedTo (non-nil pointer to empty slice):
 	// egress should be locked down to DNS + API server baseline only.
-	emptyRules := &[]llamav1alpha1.EgressRule{}
+	emptyRules := &[]networkingv1.NetworkPolicyEgressRule{}
 	transformer := CreateNetworkPolicyTransformer(NetworkPolicyTransformerConfig{
 		InstanceName:      "test-instance",
 		ServicePort:       8321,
@@ -421,8 +442,18 @@ func TestNetworkPolicyTransformer_AllowedToWithoutPort(t *testing.T) {
 		APIServerHost:     "10.96.0.1",
 		APIServerPort:     443,
 		NetworkSpec: &llamav1alpha1.NetworkSpec{
-			AllowedTo: &[]llamav1alpha1.EgressRule{
-				{Namespace: "model-serving"},
+			AllowedTo: &[]networkingv1.NetworkPolicyEgressRule{
+				{
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"kubernetes.io/metadata.name": "model-serving",
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 	})

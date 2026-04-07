@@ -24,8 +24,13 @@ spec:
         - myproject/lls-allowed
         - team/authorized
     allowedTo:
-      - namespace: ollama-dist
-        port: 11434
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ollama-dist
+        ports:
+          - protocol: TCP
+            port: 11434
 ---
 # Example with exposeRoute enabled and all namespaces allowed
 apiVersion: llamastack.io/v1alpha1

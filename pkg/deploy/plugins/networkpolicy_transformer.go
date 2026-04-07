@@ -17,6 +17,7 @@ limitations under the License.
 package plugins
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -33,6 +34,9 @@ const (
 	// translates 53→5353. NetworkPolicy evaluates after DNAT, so we must
 	// allow the actual pod port.
 	openShiftDNSPort = 5353
+	// numBaselineEgressRules is the number of baseline egress rules
+	// (kube-dns, openshift-dns, API server) added when egress is restricted.
+	numBaselineEgressRules = 3
 	// AllNamespacesSelector is the special value to allow all namespaces.
 	AllNamespacesSelector = "*"
 	// Allow traffic from OpenShift router namespaces.
@@ -106,7 +110,11 @@ func (t *networkPolicyTransformer) transformNetworkPolicy(res *resource.Resource
 	if t.hasEgressConfig() {
 		policyTypes, _ := spec["policyTypes"].([]any)
 		spec["policyTypes"] = append(policyTypes, "Egress")
-		spec["egress"] = t.buildEgressRules()
+		egressRules, err := t.buildEgressRules()
+		if err != nil {
+			return fmt.Errorf("failed to build egress rules: %w", err)
+		}
+		spec["egress"] = egressRules
 	}
 
 	return updateResource(res, data)
@@ -277,10 +285,10 @@ func (t *networkPolicyTransformer) hasEgressConfig() bool {
 	return t.config.NetworkSpec != nil && t.config.NetworkSpec.AllowedTo != nil
 }
 
-func (t *networkPolicyTransformer) buildEgressRules() []any {
+func (t *networkPolicyTransformer) buildEgressRules() ([]any, error) {
 	allowedTo := *t.config.NetworkSpec.AllowedTo
 	numDestinations := len(allowedTo)
-	rules := make([]any, 0, 2+numDestinations)
+	rules := make([]any, 0, numBaselineEgressRules+numDestinations)
 	rules = append(rules,
 		// Vanilla Kubernetes DNS (CoreDNS in kube-system listens on port 53)
 		map[string]any{
@@ -337,28 +345,17 @@ func (t *networkPolicyTransformer) buildEgressRules() []any {
 		},
 	)
 
-	for _, dest := range allowedTo {
-		rule := map[string]any{
-			"to": []any{
-				map[string]any{
-					"namespaceSelector": map[string]any{
-						"matchLabels": map[string]any{
-							"kubernetes.io/metadata.name": dest.Namespace,
-						},
-					},
-				},
-			},
+	for _, egressRule := range allowedTo {
+		ruleJSON, err := json.Marshal(egressRule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal egress rule: %w", err)
 		}
-		if dest.Port != nil {
-			rule["ports"] = []any{
-				map[string]any{
-					"protocol": "TCP",
-					"port":     *dest.Port,
-				},
-			}
+		var ruleMap map[string]any
+		if err := json.Unmarshal(ruleJSON, &ruleMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal egress rule: %w", err)
 		}
-		rules = append(rules, rule)
+		rules = append(rules, ruleMap)
 	}
 
-	return rules
+	return rules, nil
 }

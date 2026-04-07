@@ -18,6 +18,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -61,9 +62,28 @@ func TestNetworkPolicySuite(t *testing.T) {
 	t.Run("should resolve DNS on OpenShift with egress restrictions", testDNSResolutionOnOpenShift)
 }
 
-func createNetworkPolicyTestCR(name, namespace string, extraEgress ...v1alpha1.EgressRule) *v1alpha1.LlamaStackDistribution {
-	ollamaPort := int32(11434)
-	rules := []v1alpha1.EgressRule{{Namespace: "ollama-dist", Port: &ollamaPort}}
+func createNetworkPolicyTestCR(name, namespace string, extraEgress ...networkingv1.NetworkPolicyEgressRule) *v1alpha1.LlamaStackDistribution {
+	ollamaPort := intstr.FromInt32(11434)
+	protocolTCP := corev1.ProtocolTCP
+	rules := []networkingv1.NetworkPolicyEgressRule{
+		{
+			To: []networkingv1.NetworkPolicyPeer{
+				{
+					NamespaceSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{
+							"kubernetes.io/metadata.name": "ollama-dist",
+						},
+					},
+				},
+			},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{
+					Protocol: &protocolTCP,
+					Port:     &ollamaPort,
+				},
+			},
+		},
+	}
 	rules = append(rules, extraEgress...)
 	return &v1alpha1.LlamaStackDistribution{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
@@ -92,9 +112,24 @@ func testNetworkPolicyStructure(t *testing.T) {
 	createTestNamespace(t, ns)
 	t.Cleanup(func() { cleanupNetworkPolicyTest(t, ns, crName) })
 
-	egressPort := int32(8080)
-	cr := createNetworkPolicyTestCR(crName, ns, v1alpha1.EgressRule{
-		Namespace: "test-egress-target", Port: &egressPort,
+	egressPort := intstr.FromInt32(8080)
+	protocolTCP := corev1.ProtocolTCP
+	cr := createNetworkPolicyTestCR(crName, ns, networkingv1.NetworkPolicyEgressRule{
+		To: []networkingv1.NetworkPolicyPeer{
+			{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"kubernetes.io/metadata.name": "test-egress-target",
+					},
+				},
+			},
+		},
+		Ports: []networkingv1.NetworkPolicyPort{
+			{
+				Protocol: &protocolTCP,
+				Port:     &egressPort,
+			},
+		},
 	})
 	require.NoError(t, TestEnv.Client.Create(TestEnv.Ctx, cr))
 
