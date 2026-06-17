@@ -7275,8 +7275,8 @@ spec:
         - name: GOMEMLIMIT
           value: 800MiB
         - name: OPERATOR_VERSION
-          value: latest
-        image: quay.io/ogx-ai/ogx-k8s-operator:latest
+          value: 0.11.0
+        image: quay.io/ogx-ai/ogx-k8s-operator:v0.11.0
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
