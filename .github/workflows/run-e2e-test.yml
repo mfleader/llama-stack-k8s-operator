@@ -19,6 +19,10 @@ on:
 jobs:
   e2e-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        restart: [true, false]
     outputs:
       success: ${{ steps.test-results.outputs.success }}
       summary: ${{ steps.test-results.outputs.summary }}
@@ -82,8 +86,25 @@ jobs:
 
       - name: Push operator image to local registry
         run: |
-          docker tag kind-registry:5000/ogx-k8s-operator:latest localhost:5000/ogx-k8s-operator:latest
-          docker push localhost:5000/ogx-k8s-operator:latest
+          node=$(docker ps --filter label=io.x-k8s.kind.role=control-plane --format '{{.Names}}')
+          docker inspect -f 'before: StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' "$node"
+          if [ "${{ matrix.restart }}" = "true" ]; then
+            echo "daemon.json write at $(date -u +%T.%N)"
+            echo '{"insecure-registries": ["kind-registry:5000"]}' | sudo tee /etc/docker/daemon.json
+            sudo systemctl restart docker
+            until docker exec kind-registry true 2>/dev/null; do sleep 1; done
+            docker push kind-registry:5000/ogx-k8s-operator:latest
+          else
+            docker tag kind-registry:5000/ogx-k8s-operator:latest localhost:5000/ogx-k8s-operator:latest
+            docker push localhost:5000/ogx-k8s-operator:latest
+          fi
+          echo "push done at $(date -u +%T.%N)"
+          docker inspect -f 'after: StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}}' "$node"
+          for i in $(seq 240); do
+            if kubectl get --raw /openapi/v3 >/dev/null 2>&1; then echo "openapi/v3 ok at $(date -u +%T.%N)"; break; fi
+            echo "openapi/v3 not ready at $(date -u +%T.%N)"
+            sleep 0.25
+          done
 
       - name: Install cert-manager
         run: |
@@ -144,7 +165,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: logs-${{ github.run_id }}-${{ github.run_attempt }}-restart-${{ matrix.restart }}
           path: |
             *.log
           retention-days: 1
